@@ -5,12 +5,28 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import NextImage from "next/image";
 import {
   Trash2, Lock, Unlock, Clock, Copy, Check, ExternalLink,
-  ArrowLeft, LogOut, File, Image, Video, Music, FileText, Loader2
+  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical
 } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://blnq-api.blnq.workers.dev";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://blnq.click";
 
 interface Upload {
   id: string;
@@ -23,16 +39,120 @@ interface Upload {
   bundle_id: string | null;
 }
 
+interface BundleCardProps {
+  bundle: Bundle;
+  sensors: ReturnType<typeof useSensors>;
+  onDragEnd: (bundleSlug: string, event: DragEndEvent) => void;
+}
+
+function BundleCard({ bundle, sensors, onDragEnd }: BundleCardProps) {
+  return (
+    <div className="bg-zinc-900/40 border border-zinc-900 rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-sm font-semibold text-zinc-100">{bundle.title || "Untitled Bundle"}</p>
+          <p className="text-[11px] text-zinc-500 font-mono">{bundle.slug}</p>
+        </div>
+        <Link href={`/b/${bundle.slug}`} className="text-xs text-indigo-400 hover:text-indigo-300">
+          View Bundle
+        </Link>
+      </div>
+
+      {bundle.files.length === 0 ? (
+        <p className="text-xs text-zinc-500">This bundle is empty.</p>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={(event: DragEndEvent) => onDragEnd(bundle.slug, event)}
+        >
+          <SortableContext
+            items={bundle.files.map((f) => f.slug)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-2">
+              {bundle.files.map((file) => (
+                <BundleFileRow key={file.id} file={file} />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
+    </div>
+  );
+}
+
+interface BundleFileRowProps {
+  file: BundleFile;
+}
+
+function BundleFileRow({ file }: BundleFileRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: file.slug });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.7 : 1,
+  };
+
+  const formatBytes = (bytes: number | null) => {
+    if (!bytes) return "—";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center justify-between bg-zinc-950/60 border border-zinc-900 rounded-xl px-3 py-2 text-xs text-zinc-300"
+      {...attributes}
+      {...listeners}
+    >
+      <div className="flex items-center gap-2">
+        <MoveVertical className="w-3.5 h-3.5 text-zinc-500" />
+        <span className="font-mono truncate max-w-[180px]">{file.slug}</span>
+      </div>
+      <span className="text-[11px] text-zinc-500">{formatBytes(file.file_size)}</span>
+    </div>
+  );
+}
+
+interface BundleFile {
+  id: string;
+  slug: string;
+  file_type: string | null;
+  file_size: number | null;
+  position: number | null;
+}
+
+interface Bundle {
+  id: string;
+  slug: string;
+  title: string | null;
+  created_at: string;
+  files: BundleFile[];
+}
+
 export default function DashboardPage() {
   const { user, session, loading: authLoading, signOut } = useAuth();
   const router = useRouter();
   const [uploads, setUploads] = useState<Upload[]>([]);
+  const [bundles, setBundles] = useState<Bundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [pinModal, setPinModal] = useState<{ slug: string; action: "set" | "change" } | null>(null);
   const [pinValue, setPinValue] = useState("");
   const [expiryModal, setExpiryModal] = useState<string | null>(null);
+  const [bundleSaving, setBundleSaving] = useState<string | null>(null);
+  const [bundleError, setBundleError] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -41,17 +161,41 @@ export default function DashboardPage() {
   }, [user, authLoading, router]);
 
   useEffect(() => {
-    if (user) fetchUploads();
+    if (user) fetchData();
   }, [user]);
 
-  const fetchUploads = async () => {
+  const fetchData = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("uploads")
-      .select("*")
-      .eq("user_id", user!.id)
-      .order("created_at", { ascending: false });
-    if (!error && data) setUploads(data);
+    const [uploadsResp, bundlesResp] = await Promise.all([
+      supabase
+        .from("uploads")
+        .select("*")
+        .eq("user_id", user!.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("bundles")
+        .select("id, slug, title, created_at, uploads(id, slug, file_type, file_size, position)")
+        .eq("user_id", user!.id)
+        .order("created_at", { ascending: false })
+        .order("position", { foreignTable: "uploads", ascending: true }),
+    ]);
+
+    if (!uploadsResp.error && uploadsResp.data) {
+      setUploads(uploadsResp.data);
+    }
+
+    if (!bundlesResp.error && bundlesResp.data) {
+      const normalized = bundlesResp.data.map((bundle: any) => ({
+        id: bundle.id,
+        slug: bundle.slug,
+        title: bundle.title,
+        created_at: bundle.created_at,
+        files: (bundle.uploads || [])
+          .sort((a: BundleFile, b: BundleFile) => (a.position ?? 0) - (b.position ?? 0)),
+      }));
+      setBundles(normalized);
+    }
+
     setLoading(false);
   };
 
@@ -79,7 +223,7 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${session?.access_token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ pin: pinValue }),
       });
-      await fetchUploads();
+      await fetchData();
     } catch (e) { /* ignore */ }
     setPinModal(null);
     setPinValue("");
@@ -93,7 +237,7 @@ export default function DashboardPage() {
         method: "DELETE",
         headers: { Authorization: `Bearer ${session?.access_token}` },
       });
-      await fetchUploads();
+      await fetchData();
     } catch (e) { /* ignore */ }
     setActionLoading(null);
   };
@@ -106,10 +250,53 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${session?.access_token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ expires_in: expiresIn }),
       });
-      await fetchUploads();
+      await fetchData();
     } catch (e) { /* ignore */ }
     setExpiryModal(null);
     setActionLoading(null);
+  };
+
+  const persistBundleOrder = async (bundleSlug: string, order: string[]) => {
+    if (!session?.access_token) return;
+    setBundleSaving(bundleSlug);
+    setBundleError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/bundles/${encodeURIComponent(bundleSlug)}/reorder`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ order }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to save order");
+      }
+    } catch (err: any) {
+      setBundleError(err?.message || "Failed to save bundle order");
+      await fetchData();
+    } finally {
+      setBundleSaving(null);
+    }
+  };
+
+  const handleBundleDragEnd = (bundleSlug: string, event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    setBundles((prev) => prev.map((bundle) => {
+      if (bundle.slug !== bundleSlug) return bundle;
+      const oldIndex = bundle.files.findIndex((f) => f.slug === active.id);
+      const newIndex = bundle.files.findIndex((f) => f.slug === over.id);
+      if (oldIndex === -1 || newIndex === -1) return bundle;
+      const reordered = arrayMove(bundle.files, oldIndex, newIndex).map((file: BundleFile, idx: number) => ({
+        ...file,
+        position: idx,
+      }));
+      persistBundleOrder(bundle.slug, reordered.map((file: BundleFile) => file.slug));
+      return { ...bundle, files: reordered };
+    }));
   };
 
   const copyLink = (slug: string) => {
@@ -120,7 +307,7 @@ export default function DashboardPage() {
 
   const getFileIcon = (type: string | null) => {
     if (!type) return <File className="w-4 h-4" />;
-    if (type.startsWith("image/")) return <Image className="w-4 h-4" />;
+    if (type.startsWith("image/")) return <ImageIcon className="w-4 h-4" />;
     if (type.startsWith("video/")) return <Video className="w-4 h-4" />;
     if (type.startsWith("audio/")) return <Music className="w-4 h-4" />;
     if (type.includes("text") || type.includes("pdf")) return <FileText className="w-4 h-4" />;
@@ -148,24 +335,32 @@ export default function DashboardPage() {
   if (!user) return null;
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-50 font-sans">
-      <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full bg-purple-900/10 blur-[120px] pointer-events-none" />
+    <div className="flex flex-col min-h-screen bg-[#050205] text-[#f7f4ef] font-sans">
+      <div className="absolute top-[-20%] left-[-10%] w-[640px] h-[640px] rounded-full bg-[#ff7a18]/10 blur-[120px] pointer-events-none" />
 
       {/* Header */}
-      <header className="w-full max-w-5xl mx-auto px-6 py-6 flex items-center justify-between border-b border-zinc-900 z-10">
-        <Link href="/" className="flex items-center space-x-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center font-bold tracking-tighter text-white text-lg shadow-lg shadow-indigo-500/20">
-            B
-          </div>
-          <span className="text-xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-            Blnq
-          </span>
+      <header className="w-full max-w-5xl mx-auto px-6 py-6 flex items-center justify-between border-b border-[#ff7a18]/25 z-10">
+        <Link href="/" className="flex items-center gap-3">
+          <NextImage
+            src="/blnq0.jpg"
+            alt="Blnq sigil"
+            width={42}
+            height={42}
+            className="rounded-2xl border border-[#ff7a18]/40 shadow-[0_0_25px_rgba(255,122,24,0.35)]"
+          />
+          <NextImage
+            src="/logofull.png"
+            alt="Blnq wordmark"
+            width={120}
+            height={46}
+            className="h-9 w-auto object-contain"
+          />
         </Link>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-zinc-500 hidden sm:block">{user.email}</span>
+          <span className="text-xs text-[#ffb347]/90 hidden sm:block font-mono">{user.email}</span>
           <button
             onClick={() => { signOut(); router.push("/"); }}
-            className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-all cursor-pointer"
+            className="p-2 rounded-lg bg-[#1a120e]/70 hover:bg-[#1a120e] border border-[#ff7a18]/25 hover:border-[#ffb347]/50 text-[#ffb347] hover:text-white transition-all cursor-pointer"
             title="Sign Out"
           >
             <LogOut className="w-4 h-4" />
@@ -175,10 +370,13 @@ export default function DashboardPage() {
 
       <main className="flex-1 w-full max-w-4xl mx-auto px-6 py-8 z-10">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-zinc-100">My Uploads</h1>
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-[#ffb347]/70">Dashboard</p>
+            <h1 className="text-2xl font-bold text-[#f7f4ef]">My Uploads</h1>
+          </div>
           <Link
             href="/"
-            className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center gap-1 transition-colors"
+            className="text-xs text-[#ffb347] hover:text-[#ffd65b] flex items-center gap-1 transition-colors"
           >
             <ArrowLeft className="w-3 h-3" /> Upload New
           </Link>
@@ -186,34 +384,34 @@ export default function DashboardPage() {
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="w-6 h-6 animate-spin text-zinc-500" />
+            <Loader2 className="w-6 h-6 animate-spin text-[#ffb347]" />
           </div>
         ) : uploads.length === 0 ? (
           <div className="text-center py-20">
-            <p className="text-zinc-500 text-sm">No uploads yet.</p>
-            <Link href="/" className="text-indigo-400 text-xs mt-2 inline-block hover:text-indigo-300">Upload your first file</Link>
+            <p className="text-[#ffb347]/70 text-sm">No uploads yet.</p>
+            <Link href="/" className="text-[#ff7a18] text-xs mt-2 inline-block hover:text-[#ffd65b]">Upload your first file</Link>
           </div>
         ) : (
           <div className="space-y-2">
             {uploads.map((upload) => (
               <div
                 key={upload.id}
-                className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3"
+                className="bg-[#0a0308]/70 border border-[#ff7a18]/20 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3 shadow-[0_15px_40px_rgba(0,0,0,0.35)]"
               >
                 {/* File info */}
                 <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400">
+                  <div className="p-2 rounded-lg bg-[#1a120e] border border-[#ff7a18]/25 text-[#ffb347]">
                     {getFileIcon(upload.file_type)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-mono text-zinc-200 truncate">{upload.slug}</p>
-                    <div className="flex items-center gap-3 mt-0.5 text-[10px] text-zinc-500">
+                    <p className="text-sm font-mono text-[#f7f4ef] truncate">{upload.slug}</p>
+                    <div className="flex items-center gap-3 mt-0.5 text-[10px] text-[#ffb347]/60">
                       <span>{formatBytes(upload.file_size)}</span>
                       <span>{upload.file_type?.split("/")[1] || "file"}</span>
                       <span>{formatDate(upload.created_at)}</span>
-                      {upload.password_hash && <span className="text-amber-400 flex items-center gap-0.5"><Lock className="w-2.5 h-2.5" /> PIN</span>}
+                      {upload.password_hash && <span className="text-[#ffd65b] flex items-center gap-0.5"><Lock className="w-2.5 h-2.5" /> PIN</span>}
                       {upload.expires_at && (
-                        <span className="text-blue-400 flex items-center gap-0.5">
+                        <span className="text-[#7dd3fc] flex items-center gap-0.5">
                           <Clock className="w-2.5 h-2.5" /> {formatDate(upload.expires_at)}
                         </span>
                       )}
@@ -228,7 +426,7 @@ export default function DashboardPage() {
                     className={`p-2 rounded-lg border text-xs transition-all cursor-pointer ${
                       copied === upload.slug
                         ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-                        : "bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200"
+                        : "bg-[#1a120e] border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] hover:text-white"
                     }`}
                     title="Copy Link"
                   >
@@ -238,7 +436,7 @@ export default function DashboardPage() {
                     href={`${API_URL}/${upload.slug}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-all"
+                    className="p-2 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] hover:text-white transition-all"
                     title="Open File"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -246,7 +444,7 @@ export default function DashboardPage() {
                   <button
                     onClick={() => upload.password_hash ? handleRemovePin(upload.slug) : setPinModal({ slug: upload.slug, action: "set" })}
                     disabled={actionLoading === upload.slug}
-                    className="p-2 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-amber-400 transition-all cursor-pointer disabled:opacity-50"
+                    className="p-2 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-[#ffd65b]/40 text-[#ffb347] hover:text-[#ffd65b] transition-all cursor-pointer disabled:opacity-50"
                     title={upload.password_hash ? "Remove PIN" : "Set PIN"}
                   >
                     {upload.password_hash ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
@@ -254,7 +452,7 @@ export default function DashboardPage() {
                   <button
                     onClick={() => setExpiryModal(upload.slug)}
                     disabled={actionLoading === upload.slug}
-                    className="p-2 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-blue-400 transition-all cursor-pointer disabled:opacity-50"
+                    className="p-2 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-[#7dd3fc]/50 text-[#ffb347] hover:text-[#7dd3fc] transition-all cursor-pointer disabled:opacity-50"
                     title="Set Expiry"
                   >
                     <Clock className="w-3.5 h-3.5" />
@@ -262,7 +460,7 @@ export default function DashboardPage() {
                   <button
                     onClick={() => handleDelete(upload.slug)}
                     disabled={actionLoading === upload.slug}
-                    className="p-2 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-red-800 text-zinc-400 hover:text-red-400 transition-all cursor-pointer disabled:opacity-50"
+                    className="p-2 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-red-500/60 text-[#ffb347] hover:text-red-300 transition-all cursor-pointer disabled:opacity-50"
                     title="Delete"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -272,6 +470,40 @@ export default function DashboardPage() {
             ))}
           </div>
         )}
+
+        {/* Bundles Section */}
+        <section className="mt-10">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-semibold text-[#f7f4ef]">Bundles</h2>
+              <p className="text-xs text-[#ffb347]/70">Drag files to reorder gallery presentation.</p>
+            </div>
+            {bundleSaving && (
+              <span className="text-[11px] text-[#ffd65b] flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+              </span>
+            )}
+          </div>
+
+          {bundleError && (
+            <p className="text-xs text-red-400 mb-3">{bundleError}</p>
+          )}
+
+          {bundles.length === 0 ? (
+            <p className="text-sm text-zinc-500">No bundles yet. Create one from the uploader when selecting multiple files.</p>
+          ) : (
+            <div className="space-y-3">
+              {bundles.map((bundle) => (
+                <BundleCard
+                  key={bundle.id}
+                  bundle={bundle}
+                  sensors={sensors}
+                  onDragEnd={handleBundleDragEnd}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       </main>
 
       {/* PIN Modal */}

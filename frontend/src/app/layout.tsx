@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Blnq - Instant, Secure File Sharing",
-  description: "Upload any file instantly and get an anonymous, shareable link powered by Cloudflare Workers and R2.",
+  description: "Upload any file instantly and get an anonymous, shareable link from the blnq.click beam.",
 };
 
 export default function RootLayout({

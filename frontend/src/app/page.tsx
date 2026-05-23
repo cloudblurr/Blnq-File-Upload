@@ -18,9 +18,10 @@ import {
   LogIn
 } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 import { useAuth } from "@/lib/auth-context";
 
-const DEFAULT_API_URL = "https://blnq-api.blnq.workers.dev";
+const DEFAULT_API_URL = "https://blnq.click";
 
 export default function Home() {
   const { user } = useAuth();
@@ -416,8 +417,8 @@ export default function Home() {
           onClick={() => setPinEnabled(!pinEnabled)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer border ${
             pinEnabled
-              ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
-              : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
+              ? "bg-[#ff7a18]/15 border-[#ffd65b]/40 text-[#ffd65b]"
+              : "bg-[#050205] border-[#ff7a18]/25 text-[#ffb347]/70 hover:text-[#f7f4ef] hover:border-[#ffb347]/50"
           }`}
         >
           <Lock className="w-3 h-3" />
@@ -427,7 +428,7 @@ export default function Home() {
           <select
             value={expiresIn}
             onChange={(e) => setExpiresIn(e.target.value)}
-            className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-zinc-950 border border-zinc-800 text-zinc-400 outline-none cursor-pointer hover:border-zinc-700 transition-all"
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-[#050205] border border-[#ff7a18]/25 text-[#ffb347]/70 outline-none cursor-pointer hover:border-[#ffb347]/50 transition-all"
           >
             <option value="">No Expiry</option>
             <option value="1h">1 Hour</option>
@@ -447,7 +448,7 @@ export default function Home() {
           value={pinValue}
           onChange={(e) => setPinValue(e.target.value.replace(/\D/g, "").slice(0, 8))}
           placeholder="Enter 4-8 digit PIN"
-          className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 focus:border-amber-500/50 outline-none text-xs text-zinc-100 font-mono text-center tracking-widest transition-all"
+          className="w-full px-3 py-2 rounded-lg bg-[#050205] border border-[#ff7a18]/25 focus:border-[#ffd65b]/60 outline-none text-xs text-[#f7f4ef] font-mono text-center tracking-widest transition-all"
         />
       )}
     </>
@@ -466,19 +467,32 @@ export default function Home() {
       : file?.name;
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-50 font-sans selection:bg-zinc-800 selection:text-white overflow-hidden relative">
+    <div className="flex flex-col min-h-screen text-[#f7f4ef] font-sans selection:bg-[#ff7a18]/40 selection:text-white overflow-hidden relative">
       {/* Background gradients for design depth */}
-      <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full bg-purple-900/10 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] rounded-full bg-blue-900/10 blur-[120px] pointer-events-none" />
+      <div className="absolute top-[-20%] left-[-10%] w-[620px] h-[620px] rounded-full bg-[#ff7a18]/10 blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-8%] w-[540px] h-[540px] rounded-full bg-[#ffb347]/15 blur-[130px] pointer-events-none" />
 
       {/* Header */}
-      <header className="w-full max-w-5xl mx-auto px-6 py-6 flex items-center justify-between border-b border-zinc-900 z-10">
-        <div className="flex items-center space-x-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center font-bold tracking-tighter text-white text-lg shadow-lg shadow-indigo-500/20">
-            B
-          </div>
-          <span className="text-xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-            Blnq
+      <header className="w-full max-w-5xl mx-auto px-6 py-6 flex items-center justify-between border-b border-[#ff7a18]/25 z-10">
+        <div className="flex items-center gap-3">
+          <Image
+            src="/blnq0.jpg"
+            alt="Blnq Sigil"
+            width={48}
+            height={48}
+            className="rounded-2xl border border-[#ff7a18]/40 shadow-[0_0_25px_rgba(255,122,24,0.35)]"
+            priority
+          />
+          <Image
+            src="/logofull.png"
+            alt="Blnq wordmark"
+            width={140}
+            height={48}
+            className="h-10 w-auto object-contain drop-shadow-[0_12px_30px_rgba(0,0,0,0.45)]"
+            priority
+          />
+          <span className="hidden sm:block text-[11px] uppercase tracking-[0.32em] text-[#ffb347]">
+            blnq.click
           </span>
         </div>
 
@@ -486,7 +500,7 @@ export default function Home() {
           {user ? (
             <Link
               href="/dashboard"
-              className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-all"
+              className="p-2 rounded-lg bg-[#1a120e]/80 hover:bg-[#1a120e] border border-[#ff7a18]/30 hover:border-[#ffb347]/60 text-[#ffb347] hover:text-white transition-all"
               title="Dashboard"
             >
               <User className="w-4 h-4" />
@@ -494,7 +508,7 @@ export default function Home() {
           ) : (
             <Link
               href="/login"
-              className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-all"
+              className="p-2 rounded-lg bg-[#1a120e]/80 hover:bg-[#1a120e] border border-[#ff7a18]/30 hover:border-[#ffb347]/60 text-[#ffb347] hover:text-white transition-all"
               title="Sign In"
             >
               <LogIn className="w-4 h-4" />
@@ -502,7 +516,7 @@ export default function Home() {
           )}
           <button 
             onClick={() => setShowSettings(!showSettings)}
-            className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-all cursor-pointer"
+            className="p-2 rounded-lg bg-[#1a120e]/80 hover:bg-[#1a120e] border border-[#ff7a18]/30 hover:border-[#ffb347]/60 text-[#ffb347] hover:text-white transition-all cursor-pointer"
             title="API Settings"
           >
             <Settings className="w-4 h-4" />
@@ -511,50 +525,48 @@ export default function Home() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 flex flex-col items-center justify-center px-6 py-12 max-w-md mx-auto w-full z-10">
+      <main className="flex-1 flex flex-col items-center justify-center px-6 py-12 max-w-2xl mx-auto w-full z-10">
         
         {/* Title & Slogan */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-extrabold tracking-tight mb-2 bg-gradient-to-r from-white via-zinc-200 to-zinc-500 bg-clip-text text-transparent">
-            Instant File Sharing
+          <p className="text-xs uppercase tracking-[0.4em] text-[#ffb347]/70 mb-3">Live at blnq.click</p>
+          <h1 className="text-4xl sm:text-5xl font-black tracking-tight mb-3 bg-gradient-to-r from-[#ff7a18] via-[#ffb347] to-[#ffd65b] bg-clip-text text-transparent">
+            Beam gorgeous, private drops in seconds.
           </h1>
-          <p className="text-sm text-zinc-400">
-            Upload any file. Receive an instantly shareable, obfuscated URL.
-          </p>
         </div>
 
         {/* Settings panel override overlay */}
         {showSettings && (
-          <div className="w-full bg-zinc-900/95 border border-zinc-800 rounded-2xl p-5 mb-6 shadow-xl animate-in fade-in duration-200">
-            <h3 className="text-sm font-semibold mb-3 flex items-center text-zinc-200">
-              <Settings className="w-4 h-4 mr-1.5 text-indigo-400" />
+          <div className="w-full bg-[#12060b]/90 border border-[#ff7a18]/30 rounded-2xl p-5 mb-6 shadow-[0_25px_60px_rgba(0,0,0,0.55)] animate-in fade-in duration-200">
+            <h3 className="text-sm font-semibold mb-3 flex items-center text-[#f7f4ef]">
+              <Settings className="w-4 h-4 mr-1.5 text-[#ffb347]" />
               API Settings
             </h3>
             <form onSubmit={saveSettings} className="space-y-3.5">
               <div>
-                <label className="block text-xs text-zinc-400 mb-1.5 font-medium">
+                <label className="block text-xs text-[#ffb347]/80 mb-1.5 font-medium">
                   Cloudflare Worker Endpoint URL:
                 </label>
                 <input 
                   type="url"
                   required
-                  placeholder="https://your-worker.yourdomain.workers.dev"
+                  placeholder="https://blnq.click"
                   value={tempApiUrl}
                   onChange={(e) => setTempApiUrl(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-lg bg-zinc-950 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 outline-none text-sm text-zinc-100 transition-all font-mono"
+                  className="w-full px-3.5 py-2 rounded-lg bg-[#050205] border border-[#ff7a18]/25 focus:border-[#ffb347]/60 focus:ring-1 focus:ring-[#ffb347]/40 outline-none text-sm text-[#f7f4ef] transition-all font-mono"
                 />
               </div>
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  className="flex-1 py-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-colors cursor-pointer"
+                  className="flex-1 py-1.5 px-3 rounded-lg bg-gradient-to-r from-[#ff7a18] to-[#ffb347] hover:from-[#ff8c2f] hover:to-[#ffd65b] text-[#1a120e] font-semibold text-xs transition-colors cursor-pointer shadow-[0_10px_25px_rgba(255,122,24,0.35)]"
                 >
                   Save Endpoint
                 </button>
                 <button
                   type="button"
                   onClick={resetSettings}
-                  className="py-1.5 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors cursor-pointer"
+                  className="py-1.5 px-3 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] text-xs transition-colors cursor-pointer"
                 >
                   Reset Default
                 </button>
@@ -564,12 +576,12 @@ export default function Home() {
                     setTempApiUrl(apiUrl);
                     setShowSettings(false);
                   }}
-                  className="py-1.5 px-3 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-400 text-xs transition-colors cursor-pointer"
+                  className="py-1.5 px-3 rounded-lg bg-transparent border border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] text-xs transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
               </div>
-            </form>
+              </form>
             <div className="mt-3 pt-3 border-t border-zinc-800/60 text-[10px] text-zinc-500 flex justify-between">
               <span>Active Endpoint:</span>
               <span className="font-mono text-[9px] text-zinc-400 break-all max-w-[200px] text-right">
@@ -580,7 +592,7 @@ export default function Home() {
         )}
 
         {/* Uploader Card */}
-        <div className="w-full bg-zinc-900/40 border border-zinc-900 rounded-3xl p-6 shadow-2xl backdrop-blur-xl relative">
+        <div className="w-full bg-[#0a0308]/80 border border-[#ff7a18]/25 rounded-3xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl relative">
           
           <input
             ref={fileInputRef}
@@ -597,8 +609,8 @@ export default function Home() {
                 onClick={() => setUploadMode("local")}
                 className={`py-2 rounded-xl border transition-all cursor-pointer ${
                   uploadMode === "local"
-                    ? "bg-indigo-600/20 border-indigo-500/50 text-indigo-100"
-                    : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    ? "bg-[#ff7a18]/15 border-[#ffb347]/50 text-[#ffb347]"
+                    : "bg-[#050205] border-[#ff7a18]/20 text-[#ffb347]/60 hover:text-[#f7f4ef]"
                 }`}
               >
                 Device Files
@@ -607,8 +619,8 @@ export default function Home() {
                 onClick={() => setUploadMode("remote")}
                 className={`py-2 rounded-xl border transition-all cursor-pointer ${
                   uploadMode === "remote"
-                    ? "bg-indigo-600/20 border-indigo-500/50 text-indigo-100"
-                    : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    ? "bg-[#ff7a18]/15 border-[#ffb347]/50 text-[#ffb347]"
+                    : "bg-[#050205] border-[#ff7a18]/20 text-[#ffb347]/60 hover:text-[#f7f4ef]"
                 }`}
               >
                 Remote URL
@@ -623,8 +635,8 @@ export default function Home() {
                 onClick={() => setBundleMode(!bundleMode)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border ${
                   bundleMode
-                    ? "bg-indigo-600/20 border-indigo-500/40 text-indigo-300"
-                    : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
+                    ? "bg-[#ff7a18]/15 border-[#ffb347]/40 text-[#ffb347]"
+                    : "bg-[#050205] border-[#ff7a18]/20 text-[#ffb347]/60 hover:text-[#f7f4ef] hover:border-[#ffb347]/40"
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
@@ -643,20 +655,20 @@ export default function Home() {
               onClick={triggerFileInput}
               className={`w-full py-12 px-4 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all ${
                 dragActive
-                  ? "border-indigo-500 bg-indigo-500/5 scale-[0.99]"
-                  : "border-zinc-800/80 hover:border-zinc-700 bg-zinc-950/20 hover:bg-zinc-950/40"
+                  ? "border-[#ffb347] bg-[#ff7a18]/5 scale-[0.99]"
+                  : "border-[#ff7a18]/30 hover:border-[#ffb347]/50 bg-[#050205]/40 hover:bg-[#0a0308]/60"
               }`}
             >
-              <div className="p-4 rounded-full bg-zinc-950 border border-zinc-800 text-zinc-400 mb-4 shadow-inner group-hover:text-zinc-200">
+              <div className="p-4 rounded-full bg-[#050205] border border-[#ff7a18]/30 text-[#ffb347] mb-4 shadow-inner">
                 <UploadCloud className="w-7 h-7" />
               </div>
-              <p className="text-sm font-semibold mb-1 text-zinc-200">
+              <p className="text-sm font-semibold mb-1 text-[#f7f4ef]">
                 {bundleMode ? "Drop up to 20 files" : "Drag and drop your file here"}
               </p>
-              <p className="text-xs text-zinc-400 mb-4">
+              <p className="text-xs text-[#ffb347]/70 mb-4">
                 or click to browse from device
               </p>
-              <span className="text-[10px] text-zinc-500 bg-zinc-900/50 py-1 px-2.5 rounded-full border border-zinc-800/50">
+              <span className="text-[10px] text-[#ffb347]/80 bg-[#1a120e]/70 py-1 px-2.5 rounded-full border border-[#ff7a18]/30">
                 {bundleMode ? "Images & videos for gallery" : "Any file type supported"}
               </span>
             </div>
@@ -666,15 +678,15 @@ export default function Home() {
           {uploadStatus === "idle" && uploadMode === "local" && (file || files.length > 0) && (
             <div className="space-y-4">
               {file && !bundleMode && (
-                <div className="p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800/60 flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-indigo-950 border border-indigo-900 text-indigo-400">
+                <div className="p-4 bg-[#050205]/70 rounded-2xl border border-[#ff7a18]/25 flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-[#1a120e] border border-[#ff7a18]/40 text-[#ffb347]">
                     <File className="w-5 h-5" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-zinc-200 truncate" title={file.name}>
+                    <p className="text-sm font-medium text-[#f7f4ef] truncate" title={file.name}>
                       {file.name}
                     </p>
-                    <p className="text-xs text-zinc-500">{formatBytes(file.size)}</p>
+                    <p className="text-xs text-[#ffb347]/70">{formatBytes(file.size)}</p>
                   </div>
                 </div>
               )}
@@ -682,15 +694,15 @@ export default function Home() {
               {files.length > 0 && bundleMode && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-zinc-300">{files.length} file{files.length > 1 ? "s" : ""} selected</span>
-                    <span className="text-[10px] text-zinc-500">{formatBytes(files.reduce((a, f) => a + f.size, 0))} total</span>
+                    <span className="text-xs font-semibold text-[#f7f4ef]">{files.length} file{files.length > 1 ? "s" : ""} selected</span>
+                    <span className="text-[10px] text-[#ffb347]/70">{formatBytes(files.reduce((a, f) => a + f.size, 0))} total</span>
                   </div>
                   <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
                     {files.map((f, i) => (
-                      <div key={i} className="p-2 bg-zinc-950/50 rounded-lg border border-zinc-800/40 flex items-center gap-2 text-xs">
-                        <File className="w-3 h-3 text-zinc-500 shrink-0" />
-                        <span className="text-zinc-300 truncate flex-1">{f.name}</span>
-                        <span className="text-zinc-500 shrink-0">{formatBytes(f.size)}</span>
+                      <div key={i} className="p-2 bg-[#050205]/60 rounded-lg border border-[#ff7a18]/20 flex items-center gap-2 text-xs">
+                        <File className="w-3 h-3 text-[#ffb347] shrink-0" />
+                        <span className="text-[#f7f4ef] truncate flex-1">{f.name}</span>
+                        <span className="text-[#ffb347]/70 shrink-0">{formatBytes(f.size)}</span>
                       </div>
                     ))}
                   </div>
@@ -699,7 +711,7 @@ export default function Home() {
                     placeholder="Bundle title (optional)"
                     value={bundleTitle}
                     onChange={(e) => setBundleTitle(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 focus:border-zinc-700 outline-none text-xs text-zinc-100 transition-all"
+                    className="w-full px-3 py-2 rounded-lg bg-[#050205] border border-[#ff7a18]/25 focus:border-[#ffb347]/50 outline-none text-xs text-[#f7f4ef] transition-all"
                   />
                 </div>
               )}
@@ -921,7 +933,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="w-full text-center py-6 text-[11px] text-zinc-500 border-t border-zinc-900 z-10">
-        &copy; {new Date().getFullYear()} Blnq &bull; Powered by Cloudflare Workers &amp; R2
+        &copy; {new Date().getFullYear()} Blnq. All signals reserved.
       </footer>
     </div>
   );

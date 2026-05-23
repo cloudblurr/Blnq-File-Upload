@@ -4,8 +4,9 @@ import React, { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { Lock, Eye, Download, ArrowLeft, Loader2, AlertTriangle, Music } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://blnq-api.blnq.workers.dev";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://blnq.click";
 
 interface FileInfo {
   slug: string;
@@ -82,7 +83,7 @@ export default function FileViewPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-zinc-950 text-zinc-400">
+      <div className="flex items-center justify-center min-h-screen bg-[#050205] text-[#ffb347]">
         <Loader2 className="w-6 h-6 animate-spin" />
       </div>
     );
@@ -90,10 +91,10 @@ export default function FileViewPage() {
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-zinc-950 text-zinc-50 px-6">
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#050205] text-[#f7f4ef] px-6">
         <AlertTriangle className="w-10 h-10 text-red-400 mb-4" />
-        <p className="text-sm text-zinc-400">{error}</p>
-        <Link href="/" className="mt-4 text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+        <p className="text-sm text-[#ffb347]/80">{error}</p>
+        <Link href="/" className="mt-4 text-xs text-[#ff7a18] hover:text-[#ffd65b] flex items-center gap-1">
           <ArrowLeft className="w-3 h-3" /> Back to Blnq
         </Link>
       </div>
@@ -103,13 +104,13 @@ export default function FileViewPage() {
   // PIN Gate
   if (fileInfo?.has_pin && !pinUnlocked) {
     return (
-      <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-50 font-sans items-center justify-center px-6">
-        <div className="w-full max-w-xs bg-zinc-900/60 border border-zinc-800 rounded-2xl p-8 shadow-2xl text-center">
-          <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mx-auto mb-5">
+      <div className="flex flex-col min-h-screen bg-[#050205] text-[#f7f4ef] font-sans items-center justify-center px-6">
+        <div className="w-full max-w-xs bg-[#0a0308]/80 border border-[#ff7a18]/25 rounded-2xl p-8 shadow-[0_25px_60px_rgba(0,0,0,0.55)] text-center">
+          <div className="w-14 h-14 rounded-full bg-[#ff7a18]/10 border border-[#ffb347]/40 flex items-center justify-center text-[#ffb347] mx-auto mb-5">
             <Lock className="w-6 h-6" />
           </div>
-          <h2 className="text-lg font-bold text-zinc-100 mb-1">Protected File</h2>
-          <p className="text-xs text-zinc-400 mb-5">Enter the PIN to access this file.</p>
+          <h2 className="text-lg font-bold text-[#f7f4ef] mb-1">Protected File</h2>
+          <p className="text-xs text-[#ffb347]/70 mb-5">Enter the PIN to access this file.</p>
 
           <form onSubmit={handlePinSubmit} className="space-y-3">
             <input
@@ -120,7 +121,7 @@ export default function FileViewPage() {
               maxLength={8}
               value={pinInput}
               onChange={(e) => setPinInput(e.target.value.replace(/\D/g, "").slice(0, 8))}
-              className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 focus:border-zinc-700 outline-none text-lg text-zinc-100 font-mono text-center tracking-[0.3em]"
+              className="w-full px-4 py-3 rounded-xl bg-[#050205] border border-[#ff7a18]/25 focus:border-[#ffd65b]/50 outline-none text-lg text-[#f7f4ef] font-mono text-center tracking-[0.3em]"
               placeholder="••••"
               autoFocus
             />
@@ -128,13 +129,13 @@ export default function FileViewPage() {
             <button
               type="submit"
               disabled={pinInput.length < 4 || pinLoading}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm transition-all cursor-pointer disabled:opacity-50"
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ffb347] hover:from-[#ff8c2f] hover:to-[#ffd65b] text-[#1a120e] font-semibold text-sm transition-all cursor-pointer disabled:opacity-50"
             >
               {pinLoading ? "Verifying..." : "Unlock"}
             </button>
           </form>
         </div>
-        <Link href="/" className="mt-6 text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1">
+        <Link href="/" className="mt-6 text-xs text-[#ffb347]/70 hover:text-[#ffd65b] flex items-center gap-1">
           <ArrowLeft className="w-3 h-3" /> Back to Blnq
         </Link>
       </div>
@@ -143,20 +144,16 @@ export default function FileViewPage() {
 
   // File Viewer
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-50 font-sans">
-      <header className="w-full max-w-5xl mx-auto px-6 py-4 flex items-center justify-between border-b border-zinc-900 z-10">
-        <Link href="/" className="flex items-center space-x-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center font-bold text-white text-sm shadow-lg shadow-indigo-500/20">
-            B
-          </div>
-          <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-            Blnq
-          </span>
+    <div className="flex flex-col min-h-screen bg-[#050205] text-[#f7f4ef] font-sans">
+      <header className="w-full max-w-5xl mx-auto px-6 py-4 flex items-center justify-between border-b border-[#ff7a18]/25 z-10">
+        <Link href="/" className="flex items-center gap-3">
+          <Image src="/blnq0.jpg" alt="Blnq" width={36} height={36} className="rounded-2xl border border-[#ff7a18]/35" />
+          <Image src="/logofull.png" alt="Blnq" width={110} height={40} className="h-8 w-auto object-contain" />
         </Link>
         <a
           href={fileUrl}
           download
-          className="py-2 px-4 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 text-xs font-medium transition-all flex items-center gap-1.5"
+          className="py-2 px-4 rounded-lg bg-[#1a120e] border border-[#ff7a18]/25 hover:border-[#ffb347]/50 text-[#ffb347] text-xs font-medium transition-all flex items-center gap-1.5"
         >
           <Download className="w-3.5 h-3.5" /> Download
         </a>
@@ -166,11 +163,11 @@ export default function FileViewPage() {
         <div className="w-full max-w-4xl">
           {isImage && (
             <div className="flex items-center justify-center">
-              <img src={fileUrl} alt={slug} className="max-w-full max-h-[80vh] rounded-xl shadow-2xl object-contain" />
+              <img src={fileUrl} alt={slug} className="max-w-full max-h-[80vh] rounded-xl shadow-[0_25px_60px_rgba(0,0,0,0.5)] object-contain" />
             </div>
           )}
           {isVideo && (
-            <video src={fileUrl} controls className="max-w-full max-h-[80vh] rounded-xl shadow-2xl mx-auto" />
+            <video src={fileUrl} controls className="max-w-full max-h-[80vh] rounded-xl shadow-[0_25px_60px_rgba(0,0,0,0.5)] mx-auto" />
           )}
           {isAudio && (
             <div className="flex flex-col items-center gap-4 py-12">
@@ -179,7 +176,7 @@ export default function FileViewPage() {
             </div>
           )}
           {isPdf && (
-            <iframe src={fileUrl} className="w-full h-[80vh] rounded-xl border border-zinc-800" />
+            <iframe src={fileUrl} className="w-full h-[80vh] rounded-xl border border-[#ff7a18]/25" />
           )}
           {!isImage && !isVideo && !isAudio && !isPdf && (
             <div className="flex flex-col items-center gap-4 py-12 text-center">
@@ -188,7 +185,7 @@ export default function FileViewPage() {
               <a
                 href={fileUrl}
                 download
-                className="py-2.5 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors"
+                className="py-2.5 px-5 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ffb347] hover:from-[#ff8c2f] hover:to-[#ffd65b] text-[#1a120e] text-sm font-semibold transition-colors"
               >
                 Download File
               </a>
@@ -196,7 +193,7 @@ export default function FileViewPage() {
           )}
 
           <div className="mt-6 text-center">
-            <p className="text-xs font-mono text-zinc-500">{slug}</p>
+            <p className="text-xs font-mono text-[#ffb347]/70">{slug}</p>
           </div>
         </div>
       </main>
