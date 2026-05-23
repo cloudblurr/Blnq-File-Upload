@@ -13,10 +13,18 @@ create table if not exists public.profiles (
   is_admin boolean not null default false,
   storage_used bigint not null default 0,
   bytes_uploaded_total bigint not null default 0,
+  stripe_customer_id text,
+  subscription_status text,
+  plan_expires_at timestamptz,
+  lifetime_plan text,
+  referral_code text unique,
+  referred_by uuid references public.profiles(id),
+  last_billing_sync timestamptz,
   created_at timestamptz not null default now()
 );
 
 create index if not exists idx_profiles_tier on public.profiles(tier);
+create index if not exists idx_profiles_referral on public.profiles(referral_code);
 
 -- Bundles table
 create table if not exists public.bundles (
@@ -142,6 +150,17 @@ create or replace function public.increment_views(row_id uuid, table_name text)
 returns void as $$
 begin
   execute format('update %I set view_count = view_count + 1 where id = $1', table_name) using row_id;
+end;
+$$ language plpgsql;
+
+create or replace function public.increment_profile_usage(p_id uuid, storage_delta bigint, total_delta bigint)
+returns void as $$
+begin
+  update public.profiles
+  set
+    storage_used = greatest(0, storage_used + coalesce(storage_delta, 0)),
+    bytes_uploaded_total = greatest(0, bytes_uploaded_total + coalesce(total_delta, 0))
+  where id = p_id;
 end;
 $$ language plpgsql;
 

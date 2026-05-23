@@ -66,7 +66,7 @@ bucket_name = "blnq-storage"
 Configure your base public domain (or Cloudflare Workers dev domain):
 ```toml
 [vars]
-PUBLIC_URL_PREFIX = "https://blnq-api.yoursubdomain.workers.dev"
+PUBLIC_URL_PREFIX = "https://blnq.click"
 ALLOWED_ORIGIN = "*" # Use your Next.js frontend URL in production for stricter security
 ```
 
@@ -75,7 +75,7 @@ Deploy the worker live onto Cloudflare's Edge Network:
 ```bash
 npm run deploy  # Or npx wrangler deploy
 ```
-Once deployed, take note of the returned endpoint URL (e.g., `https://blnq-api.yoursubdomain.workers.dev`).
+Once deployed, take note of the returned endpoint URL (e.g., `https://blnq.click`).
 
 ---
 
@@ -90,7 +90,7 @@ npm install
 
 To set a default API URL that applies to all users out-of-the-box, create a `.env.local` file inside the `frontend/` directory:
 ```env
-NEXT_PUBLIC_API_URL=https://blnq-api.yoursubdomain.workers.dev
+NEXT_PUBLIC_API_URL=https://blnq.click
 ```
 
 *Note: Individual users can also update this endpoint in real-time inside the web app's Settings panel (persisted in local storage).*
@@ -107,6 +107,22 @@ Build the frontend for optimal production hosting (e.g., Vercel, Netlify, or Clo
 npm run build
 ```
 
+### Part 3: Supabase (profiles, uploads, subscription tiers)
+
+1. Open the Supabase SQL editor for your project and run [`supabase-schema.sql`](./supabase-schema.sql). This creates/updates the `profiles`, `uploads`, `bundles`, and supporting tables plus the new subscription metadata columns (`stripe_customer_id`, `subscription_status`, `plan_expires_at`, etc.).
+2. Expose `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to the frontend along with the corresponding service key in the Worker environment (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`).
+3. Billing state is stored per-profile; the Worker now exposes `/api/plans` using the shared `TIER_LIMITS`, `TIER_FEATURES`, and public Stripe plan definitions for the UI. Keep these constants in sync if you change pricing.
+
+### Part 4: Worker-tier enforcement & quotas
+
+The Cloudflare Worker uses the shared tier config (`worker/src/tiers.ts`) to gate uploads before they hit Supabase:
+
+1. **Guest quotas (KV):** `RATE_LIMIT` now tracks `guest:ip:*` and `guest:fp:*` keys. Guests are capped at **3 uploads per 24h**, using `CF-Connecting-IP` plus an optional `x-fp-hash` header (sha256 of your fingerprint). If you provide the header from the frontend the Worker will shadow-block fingerprints that rotate IPs.
+2. **Authenticated rate limits (Supabase):** Every upload (direct, bundle member, remote) counts toward `uploadsPerHour` for the current tier. Free users stop at 20/hr, Pro at 100/hr, Ultimate at 500/hr. The Worker queries Supabase with `Prefer: count=exact` so make sure `increment_profile_usage` exists.
+3. **Feature gating:** Bundles, PINs, and custom expiry are enforced server-side. Guests/free uploads auto-expire after 72h even if the UI requests “no expiry”. Attempts to set a PIN/expiry/bundle without the right plan return HTTP 403.
+4. **Storage enforcement:** `profiles.storage_used` and `bytes_uploaded_total` are incremented through the `increment_profile_usage` RPC and decremented on delete. Free plans have a hard 5 GB ceiling, so keep that RPC deployed whenever you run the schema migrations.
+5. **Remote fetch ceiling:** Remote uploads automatically clamp to the lesser of `REMOTE_FETCH_MAX_SIZE_BYTES` and the tier’s `maxFileSize`. Upgrade plans to unlock the 2 GB / 5 GB ceilings.
+
 ---
 
 ## 🛡️ CORS and Custom Domain (Optional but Recommended)
@@ -114,7 +130,7 @@ npm run build
 By default, Cloudflare Workers do not require custom domains to operate and handle CORS. However, if you are downloading or viewing rich media, utilizing a **Custom Domain** mapped to your Worker is recommended because it bypasses Cloudflare Workers' default 100MB body limit constraints and standard browser media restrictions.
 
 1. Under your Cloudflare Worker dashboard, go to **Triggers** -> **Custom Domains** -> **Add Custom Domain** (e.g., `api.yourdomain.com`).
-2. Update your `wrangler.toml` `PUBLIC_URL_PREFIX` to point to `https://api.yourdomain.com`.
+2. Update your `wrangler.toml` `PUBLIC_URL_PREFIX` to point to `https://blnq.click` (or your own custom domain).
 3. Re-deploy the worker using `npx wrangler deploy`.
 
 ### Automating R2 Bucket CORS Rules
@@ -131,7 +147,7 @@ The script reads credentials from `.env` (or environment variables) and expects:
 - `R2_ACCOUNT_ID`
 - `R2_BUCKET_NAME`
 
-By default it enables origins `http://localhost:3000` and `https://blnq.work`, allows `GET,HEAD,PUT,OPTIONS`, permits all headers, and exposes `etag`, `content-length`, `content-type`, and `x-amz-request-id`. You can override these defaults via the following optional variables:
+By default it enables origins `http://localhost:3000` and `https://blnq.click`, allows `GET,HEAD,PUT,OPTIONS`, permits all headers, and exposes `etag`, `content-length`, `content-type`, and `x-amz-request-id`. You can override these defaults via the following optional variables:
 
 - `R2_CORS_ALLOWED_ORIGINS` – comma-separated list of origins
 - `R2_CORS_ALLOWED_METHODS` – comma-separated methods (e.g., `GET,PUT`)

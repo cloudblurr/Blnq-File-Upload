@@ -48,7 +48,7 @@ if (!apiToken || !accountId || !bucketName) {
   process.exit(1);
 }
 
-const allowedOrigins = (readEnv("R2_CORS_ALLOWED_ORIGINS") ?? "http://localhost:3000,https://blnq.work")
+const allowedOrigins = (readEnv("R2_CORS_ALLOWED_ORIGINS") ?? "http://localhost:3000,https://blnq.click")
   .split(",")
   .map(origin => origin.trim())
   .filter(Boolean);

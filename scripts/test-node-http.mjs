@@ -4,7 +4,7 @@ const data = JSON.stringify({
   rules: [
     {
       allowed: {
-        origins: ["http://localhost:3000", "https://blnq.work"],
+        origins: ["http://localhost:3000", "https://blnq.click"],
         methods: ["GET", "HEAD", "PUT", "OPTIONS"],
         headers: ["*"],
       },

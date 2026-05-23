@@ -1,26 +1,37 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #050205;
+  --foreground: #f7f4ef;
+  --brand-primary: #ff7a18;
+  --brand-secondary: #ffb347;
+  --brand-muted: #1a120e;
+  --brand-border: rgba(255, 140, 52, 0.35);
 }
 
 body {
-  background: var(--background);
+  min-height: 100vh;
+  background-color: var(--background);
+  background-image:
+    radial-gradient(circle at 15% 20%, rgba(255, 122, 24, 0.22), transparent 55%),
+    radial-gradient(circle at 75% 0%, rgba(255, 179, 71, 0.25), transparent 50%),
+    linear-gradient(145deg, #030104 0%, #07030a 60%, #0c060c 100%);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.01em;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 20%, rgba(255, 122, 24, 0.25), transparent 55%);
+  mix-blend-mode: screen;
+  opacity: 0.85;
+}
+
+::selection {
+  background: rgba(255, 122, 24, 0.35);
+  color: #fff7ef;
 }

@@ -1,10 +1,28 @@
 import { adjectives, nouns } from "./words";
+import { PLAN_DEFINITIONS, TIER_FEATURES, TIER_LIMITS, TierLimits, TierName, tierIncludesFeature } from "./tiers";
 
 const DEFAULT_EXPIRY_MESSAGE = "This file is no longer available.";
 const DMCA_REMOVAL_MESSAGE = "This file is unavailable due to a DMCA takedown.";
 const DELETED_FILE_MESSAGE = "This file has been removed.";
 const BUNDLE_FILE_LIMIT = 20;
-const DEFAULT_REMOTE_FETCH_LIMIT = 100 * 1024 * 1024; // 100MB safeguard until tiering is wired in
+const GUEST_DAILY_LIMIT = 3;
+const FREE_MAX_EXPIRY_MS = 72 * 60 * 60 * 1000;
+const FINGERPRINT_FALLBACK = "anonymous";
+const FEATURE_ERROR_MESSAGES: Record<"bundles" | "pinProtection" | "customExpiry", string> = {
+  bundles: "Bundles are available on Pro plans.",
+  pinProtection: "PIN protection is available on Pro plans.",
+  customExpiry: "Custom expiry options are available on Pro plans.",
+};
+
+class GuardError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "GuardError";
+    this.status = status;
+  }
+}
 
 interface Env {
   BLNQ_BUCKET: R2Bucket;
@@ -217,6 +235,214 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[power]}`;
 }
 
+interface ProfileRow {
+  id: string;
+  tier: string;
+  storage_used: number | string | null;
+  bytes_uploaded_total: number | string | null;
+  subscription_status?: string | null;
+  plan_expires_at?: string | null;
+  lifetime_plan?: string | null;
+}
+
+interface UploaderContext {
+  tier: TierName;
+  profile: ProfileRow | null;
+  limits: TierLimits;
+  isGuest: boolean;
+  userId?: string;
+  ip: string;
+  fingerprint: string;
+}
+
+function parseNumeric(value: number | string | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeTier(input?: string | null): TierName {
+  const normalized = (input || "free").toLowerCase();
+  if (normalized === "pro" || normalized === "ultimate") {
+    return normalized;
+  }
+  return "free";
+}
+
+async function fetchProfile(env: Env, userId?: string | null): Promise<ProfileRow | null> {
+  if (!userId) return null;
+  const rows = await supabaseQuery(env, `profiles?id=eq.${encodeURIComponent(userId)}&select=id,tier,storage_used,bytes_uploaded_total,subscription_status,plan_expires_at,lifetime_plan`, { method: "GET" });
+  return rows && rows.length ? rows[0] : null;
+}
+
+function getClientIp(request: Request): string {
+  return request.headers.get("CF-Connecting-IP") || "unknown";
+}
+
+function getFingerprintHash(request: Request): string {
+  return request.headers.get("x-fp-hash")?.trim() || FINGERPRINT_FALLBACK;
+}
+
+async function buildUploaderContext(env: Env, request: Request, userId?: string | null): Promise<UploaderContext> {
+  if (!userId) {
+    return {
+      tier: "guest",
+      profile: null,
+      limits: TIER_LIMITS.guest,
+      isGuest: true,
+      ip: getClientIp(request),
+      fingerprint: getFingerprintHash(request),
+    };
+  }
+
+  const profile = await fetchProfile(env, userId);
+  const tier = normalizeTier(profile?.tier || "free");
+  return {
+    tier,
+    profile,
+    limits: TIER_LIMITS[tier],
+    isGuest: false,
+    userId,
+    ip: getClientIp(request),
+    fingerprint: getFingerprintHash(request),
+  };
+}
+
+async function enforceUploaderRateLimits(env: Env, context: UploaderContext, submissionCount: number): Promise<void> {
+  if (submissionCount <= 0) return;
+  if (context.isGuest) {
+    await enforceGuestRateLimit(env, context, submissionCount);
+    return;
+  }
+  await enforceAuthenticatedRateLimit(env, context.userId!, context.limits.uploadsPerHour, submissionCount);
+}
+
+async function enforceGuestRateLimit(env: Env, context: UploaderContext, submissionCount: number): Promise<void> {
+  const ipKey = `guest:ip:${context.ip}`;
+  const fpKey = `guest:fp:${context.fingerprint}`;
+  const [ipRecordRaw, fpRecordRaw] = await Promise.all([
+    context.ip === "unknown" ? Promise.resolve(null) : env.RATE_LIMIT.get(ipKey),
+    env.RATE_LIMIT.get(fpKey),
+  ]);
+
+  const ipRecord = ipRecordRaw ? JSON.parse(ipRecordRaw) as { count?: number } : { count: 0 };
+  const fpRecord = fpRecordRaw ? JSON.parse(fpRecordRaw) as { shadowBlock?: boolean; ips?: string[] } : {};
+
+  if (fpRecord.shadowBlock) {
+    throw new GuardError(429, "Daily limit reached. Create a free account to continue.");
+  }
+
+  const projected = (ipRecord.count || 0) + submissionCount;
+  if (projected > GUEST_DAILY_LIMIT) {
+    const ips = new Set(fpRecord.ips || []);
+    if (context.ip !== "unknown") {
+      ips.add(context.ip);
+    }
+    const shouldShadowBlock = ips.size >= 2;
+    await env.RATE_LIMIT.put(fpKey, JSON.stringify({ ...fpRecord, ips: Array.from(ips), shadowBlock: shouldShadowBlock }), { expirationTtl: 86400 });
+    throw new GuardError(429, "Daily limit reached. Create a free account to continue.");
+  }
+}
+
+async function recordGuestUpload(env: Env, context: UploaderContext, submissionCount: number): Promise<void> {
+  if (!context.isGuest) return;
+  if (context.ip !== "unknown") {
+    const ipKey = `guest:ip:${context.ip}`;
+    const existing = await env.RATE_LIMIT.get(ipKey);
+    const payload = existing ? JSON.parse(existing) as { count?: number } : {};
+    const next = (payload.count || 0) + submissionCount;
+    await env.RATE_LIMIT.put(ipKey, JSON.stringify({ count: next }), { expirationTtl: 86400 });
+  }
+
+  const fpKey = `guest:fp:${context.fingerprint}`;
+  const existingFp = await env.RATE_LIMIT.get(fpKey);
+  const parsedFp = existingFp ? JSON.parse(existingFp) as { ips?: string[]; shadowBlock?: boolean } : {};
+  const ips = new Set(parsedFp.ips || []);
+  if (context.ip !== "unknown") {
+    ips.add(context.ip);
+  }
+  await env.RATE_LIMIT.put(fpKey, JSON.stringify({ ...parsedFp, ips: Array.from(ips) }), { expirationTtl: 86400 });
+}
+
+async function enforceAuthenticatedRateLimit(env: Env, userId: string, hourlyLimit: number, submissionCount: number): Promise<void> {
+  const sinceIso = new Date(Date.now() - 3600000).toISOString();
+  const current = await countUploadsSince(env, userId, sinceIso);
+  if (current + submissionCount > hourlyLimit) {
+    throw new GuardError(429, "Hourly upload limit reached for your plan. Try again later or upgrade.");
+  }
+}
+
+async function countUploadsSince(env: Env, userId: string, sinceIso: string): Promise<number> {
+  const url = `${env.SUPABASE_URL}/rest/v1/uploads?user_id=eq.${encodeURIComponent(userId)}&created_at=gte.${encodeURIComponent(sinceIso)}&select=id`;
+  const headers: Record<string, string> = {
+    "apikey": env.SUPABASE_SERVICE_KEY || "",
+    "Authorization": `Bearer ${env.SUPABASE_SERVICE_KEY || ""}`,
+    "Prefer": "count=exact",
+    "Range": "0-0",
+    "Range-Unit": "items",
+  };
+  const res = await fetch(url, { method: "GET", headers });
+  if (!res.ok && res.status !== 206) {
+    const text = await res.text();
+    throw new Error(`Supabase count error ${res.status}: ${text}`);
+  }
+  const contentRange = res.headers.get("Content-Range") || "";
+  const totalPart = contentRange.split("/")[1];
+  const total = totalPart ? Number(totalPart) : 0;
+  // Drain the tiny JSON payload to avoid leaked locks
+  await res.arrayBuffer();
+  return Number.isFinite(total) ? total : 0;
+}
+
+function ensureFileSizesWithinLimit(context: UploaderContext, sizes: number[]): void {
+  const maxSize = context.limits.maxFileSize;
+  const oversized = sizes.find(size => size > maxSize);
+  if (oversized) {
+    throw new GuardError(413, `Max file size for the ${context.tier} plan is ${formatBytes(maxSize)}.`);
+  }
+}
+
+function ensureStorageHeadroom(context: UploaderContext, incomingBytes: number): void {
+  if (context.isGuest) return;
+  const maxStorage = context.limits.maxStorage;
+  if (!Number.isFinite(maxStorage)) return;
+  const used = parseNumeric(context.profile?.storage_used);
+  if (used + incomingBytes > maxStorage) {
+    throw new GuardError(403, "Storage limit reached. Delete older files or upgrade your plan.");
+  }
+}
+
+function ensureFeatureAllowed(tier: TierName, feature: keyof typeof TIER_FEATURES): void {
+  if (!tierIncludesFeature(tier, feature)) {
+    const message = FEATURE_ERROR_MESSAGES[feature as keyof typeof FEATURE_ERROR_MESSAGES] || "Feature unavailable for current plan.";
+    throw new GuardError(403, message);
+  }
+}
+
+function computeTierExpiry(tier: TierName, expiresIn?: string): string | null {
+  if (tier === "guest" || tier === "free") {
+    return new Date(Date.now() + FREE_MAX_EXPIRY_MS).toISOString();
+  }
+  if (!expiresIn) return null;
+  return computeExpiresAt(expiresIn);
+}
+
+async function incrementProfileUsage(env: Env, userId: string, bytesDelta: number): Promise<void> {
+  await supabaseQuery(env, "rpc/increment_profile_usage", {
+    method: "POST",
+    body: JSON.stringify({ p_id: userId, storage_delta: bytesDelta, total_delta: bytesDelta }),
+  });
+}
+
+function sumBytes(values: number[]): number {
+  return values.reduce((acc, value) => acc + value, 0);
+}
+
+async function deleteUploadedKeys(env: Env, keys: string[]): Promise<void> {
+  await Promise.all(keys.map((key) => env.BLNQ_BUCKET.delete(key).catch(() => undefined)));
+}
+
 const CORS_HEADERS = (origin: string, allowedOrigin: string) => {
   const finalOrigin = allowedOrigin === "*" ? origin || "*" : allowedOrigin;
   const headers: Record<string, string> = {
@@ -378,6 +604,11 @@ export default {
         return await handleSetExpiry(request, env, url, jsonHeaders);
       }
 
+      // ─── GET /api/plans ─── Public plan metadata
+      if (request.method === "GET" && url.pathname === "/api/plans") {
+        return new Response(JSON.stringify({ plans: PLAN_DEFINITIONS, features: TIER_FEATURES, limits: TIER_LIMITS }), { status: 200, headers: jsonHeaders });
+      }
+
       // ─── GET /api/file-info/:slug ─── Get file metadata (public, for PIN gate check)
       if (request.method === "GET" && url.pathname.startsWith("/api/file-info/")) {
         return await handleFileInfo(request, env, url, jsonHeaders);
@@ -386,6 +617,11 @@ export default {
       // ─── GET /api/bundle-info/:slug ─── Get bundle metadata
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle-info/")) {
         return await handleBundleInfo(request, env, url, jsonHeaders);
+      }
+
+      // ─── POST /api/bundles/:slug/reorder ─── Update bundle positions
+      if (request.method === "POST" && url.pathname.match(/^\/api\/bundles\/[^/]+\/reorder$/)) {
+        return await handleBundleReorder(request, env, url, jsonHeaders);
       }
 
       // ─── GET /:key ─── Serve file from R2
@@ -536,33 +772,60 @@ async function handleCompleteUpload(request: Request, env: Env, headers: Record<
     if (!upload || !upload.slug || typeof upload.file_size !== "number") {
       return new Response(JSON.stringify({ error: "Missing upload metadata" }), { status: 400, headers });
     }
+    const context = await buildUploaderContext(env, request, upload.user_id);
+    try {
+      await enforceUploaderRateLimits(env, context, 1);
+      const headObject = await ensureObjectExists(env, upload.slug);
+      const actualSize = headObject.size ?? upload.file_size;
+      ensureFileSizesWithinLimit(context, [actualSize]);
+      ensureStorageHeadroom(context, actualSize);
 
-    await ensureObjectExists(env, upload.slug);
+      if (upload.pin) {
+        ensureFeatureAllowed(context.tier, "pinProtection");
+      }
+      if (upload.expires_in) {
+        ensureFeatureAllowed(context.tier, "customExpiry");
+      }
 
-    const passwordHash = upload.pin ? await validateAndHashPin(upload.pin) : null;
-    const expiresAt = computeExpiresAt(upload.expires_in);
-    const originalExt = getExtension(upload.slug) || null;
+      const passwordHash = upload.pin ? await validateAndHashPin(upload.pin) : null;
+      const expiresAt = computeTierExpiry(context.tier, upload.expires_in);
+      const originalExt = getExtension(upload.slug) || null;
 
-    await supabaseQuery(env, "uploads", {
-      method: "POST",
-      body: JSON.stringify({
-        slug: upload.slug,
-        user_id: upload.user_id || null,
-        original_ext: originalExt,
-        file_type: upload.file_type || null,
-        file_size: upload.file_size,
-        password_hash: passwordHash,
-        expires_at: expiresAt,
-      }),
-    });
+      await supabaseQuery(env, "uploads", {
+        method: "POST",
+        body: JSON.stringify({
+          slug: upload.slug,
+          r2_key: upload.slug,
+          user_id: upload.user_id || null,
+          original_ext: originalExt,
+          file_type: upload.file_type || null,
+          file_size: actualSize,
+          password_hash: passwordHash,
+          expires_at: expiresAt,
+          position: 0,
+        }),
+      });
 
-    const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
-    return new Response(JSON.stringify({
-      success: true,
-      key: upload.slug,
-      url: `${host}/${upload.slug}`,
-      filename: upload.slug,
-    }), { status: 200, headers });
+      if (context.isGuest) {
+        await recordGuestUpload(env, context, 1);
+      } else if (context.userId) {
+        await incrementProfileUsage(env, context.userId, actualSize);
+      }
+
+      const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
+      return new Response(JSON.stringify({
+        success: true,
+        key: upload.slug,
+        url: `${host}/${upload.slug}`,
+        filename: upload.slug,
+      }), { status: 200, headers });
+    } catch (err: any) {
+      if (err instanceof GuardError) {
+        await deleteUploadedKeys(env, [upload.slug]);
+        return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers });
+      }
+      throw err;
+    }
   }
 
   // Bundle completion
@@ -582,45 +845,73 @@ async function handleCompleteUpload(request: Request, env: Env, headers: Record<
     return new Response(JSON.stringify({ error: "Maximum 20 files per bundle" }), { status: 400, headers });
   }
 
-  for (const file of files) {
-    if (!file.slug || typeof file.file_size !== "number") {
-      return new Response(JSON.stringify({ error: "Invalid bundle file metadata" }), { status: 400, headers });
+  const context = await buildUploaderContext(env, request, bundle.user_id);
+  try {
+    ensureFeatureAllowed(context.tier, "bundles");
+    await enforceUploaderRateLimits(env, context, files.length);
+    if (bundle.pin) {
+      ensureFeatureAllowed(context.tier, "pinProtection");
     }
-    await ensureObjectExists(env, file.slug);
-  }
 
-  const passwordHash = bundle.pin ? await validateAndHashPin(bundle.pin) : null;
-  const bundleRows = await supabaseQuery(env, "bundles", {
-    method: "POST",
-    body: JSON.stringify({
-      slug: bundle.slug,
-      user_id: bundle.user_id || null,
-      title: bundle.title || "Untitled Bundle",
-      password_hash: passwordHash,
-    }),
-  });
-  const bundleId = bundleRows[0]?.id;
+    const headObjects: R2Object[] = [];
+    for (const file of files) {
+      if (!file.slug || typeof file.file_size !== "number") {
+        return new Response(JSON.stringify({ error: "Invalid bundle file metadata" }), { status: 400, headers });
+      }
+      headObjects.push(await ensureObjectExists(env, file.slug));
+    }
 
-  if (!bundleId) {
-    throw new Error("Failed to create bundle record");
-  }
+    const actualSizes = headObjects.map((obj, idx) => obj.size ?? files[idx].file_size);
+    ensureFileSizesWithinLimit(context, actualSizes);
+    ensureStorageHeadroom(context, sumBytes(actualSizes));
 
-  for (const file of files) {
-    await supabaseQuery(env, "uploads", {
+    const passwordHash = bundle.pin ? await validateAndHashPin(bundle.pin) : null;
+    const bundleRows = await supabaseQuery(env, "bundles", {
       method: "POST",
       body: JSON.stringify({
-        slug: file.slug,
+        slug: bundle.slug,
         user_id: bundle.user_id || null,
-        original_ext: getExtension(file.slug) || null,
-        file_type: file.file_type || null,
-        file_size: file.file_size,
-        password_hash: null,
-        bundle_id: bundleId,
+        title: bundle.title || "Untitled Bundle",
+        password_hash: passwordHash,
       }),
     });
-  }
+    const bundleId = bundleRows[0]?.id;
 
-  return new Response(JSON.stringify({ success: true, bundle_slug: bundle.slug }), { status: 200, headers });
+    if (!bundleId) {
+      throw new Error("Failed to create bundle record");
+    }
+
+    for (const [index, file] of files.entries()) {
+      await supabaseQuery(env, "uploads", {
+        method: "POST",
+        body: JSON.stringify({
+          slug: file.slug,
+          r2_key: file.slug,
+          user_id: bundle.user_id || null,
+          original_ext: getExtension(file.slug) || null,
+          file_type: file.file_type || null,
+          file_size: actualSizes[index],
+          password_hash: null,
+          bundle_id: bundleId,
+          position: index,
+        }),
+      });
+    }
+
+    if (context.isGuest) {
+      await recordGuestUpload(env, context, files.length);
+    } else if (context.userId) {
+      await incrementProfileUsage(env, context.userId, sumBytes(actualSizes));
+    }
+
+    return new Response(JSON.stringify({ success: true, bundle_slug: bundle.slug }), { status: 200, headers });
+  } catch (err: any) {
+    if (err instanceof GuardError) {
+      await deleteUploadedKeys(env, files.map((file) => file.slug));
+      return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers });
+    }
+    throw err;
+  }
 }
 
 interface RemoteUploadPayload {
@@ -635,6 +926,22 @@ async function handleRemoteUpload(request: Request, env: Env, headers: Record<st
   const body = await request.json().catch(() => null) as RemoteUploadPayload | null;
   if (!body || !body.url) {
     return new Response(JSON.stringify({ error: "url is required" }), { status: 400, headers });
+  }
+
+  const context = await buildUploaderContext(env, request, body.user_id);
+  try {
+    await enforceUploaderRateLimits(env, context, 1);
+    if (body.pin) {
+      ensureFeatureAllowed(context.tier, "pinProtection");
+    }
+    if (body.expires_in) {
+      ensureFeatureAllowed(context.tier, "customExpiry");
+    }
+  } catch (err: any) {
+    if (err instanceof GuardError) {
+      return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers });
+    }
+    throw err;
   }
 
   let remoteUrl: URL;
@@ -653,7 +960,8 @@ async function handleRemoteUpload(request: Request, env: Env, headers: Record<st
   }
 
   const configuredLimit = Number(env.REMOTE_FETCH_MAX_SIZE_BYTES);
-  const maxBytes = Number.isFinite(configuredLimit) && configuredLimit > 0 ? configuredLimit : DEFAULT_REMOTE_FETCH_LIMIT;
+  const workerCeiling = Number.isFinite(configuredLimit) && configuredLimit > 0 ? configuredLimit : context.limits.maxFileSize;
+  const maxBytes = Math.min(workerCeiling, context.limits.maxFileSize);
   let response: Response;
   try {
     response = await fetch(remoteUrl.toString(), { method: "GET" });
@@ -700,38 +1008,57 @@ async function handleRemoteUpload(request: Request, env: Env, headers: Record<st
   }
 
   const passwordHash = body.pin ? await validateAndHashPin(body.pin) : null;
-  const expiresAt = computeExpiresAt(body.expires_in);
+  const expiresAt = computeTierExpiry(context.tier, body.expires_in);
 
-  await supabaseQuery(env, "uploads", {
-    method: "POST",
-    body: JSON.stringify({
-      slug,
-      user_id: body.user_id || null,
-      original_ext: finalExt || null,
-      file_type: detectedMime,
+  try {
+    ensureFileSizesWithinLimit(context, [limited.bytesWritten]);
+    ensureStorageHeadroom(context, limited.bytesWritten);
+
+    await supabaseQuery(env, "uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        slug,
+        r2_key: slug,
+        user_id: body.user_id || null,
+        original_ext: finalExt || null,
+        file_type: detectedMime,
+        file_size: limited.bytesWritten,
+        password_hash: passwordHash,
+        expires_at: expiresAt,
+      }),
+    });
+
+    if (context.isGuest) {
+      await recordGuestUpload(env, context, 1);
+    } else if (context.userId) {
+      await incrementProfileUsage(env, context.userId, limited.bytesWritten);
+    }
+
+    const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
+    return new Response(JSON.stringify({
+      success: true,
+      key: slug,
+      url: `${host}/${slug}`,
+      filename: slug,
+      via: "remote",
       file_size: limited.bytesWritten,
-      password_hash: passwordHash,
-      expires_at: expiresAt,
-    }),
-  });
-
-  const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
-  return new Response(JSON.stringify({
-    success: true,
-    key: slug,
-    url: `${host}/${slug}`,
-    filename: slug,
-    via: "remote",
-    file_size: limited.bytesWritten,
-    content_type: detectedMime,
-  }), { status: 200, headers });
+      content_type: detectedMime,
+    }), { status: 200, headers });
+  } catch (err: any) {
+    if (err instanceof GuardError) {
+      await env.BLNQ_BUCKET.delete(slug).catch(() => undefined);
+      return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers });
+    }
+    throw err;
+  }
 }
 
-async function ensureObjectExists(env: Env, key: string): Promise<void> {
+async function ensureObjectExists(env: Env, key: string): Promise<R2Object> {
   const head = await env.BLNQ_BUCKET.head(key);
   if (!head) {
     throw new Error(`Object ${key} not found in R2. Upload may have failed.`);
   }
+  return head;
 }
 
 function computeExpiresAt(expiresIn?: string): string | null {
@@ -923,16 +1250,21 @@ async function handleDelete(request: Request, env: Env, url: URL, headers: Recor
   const userId = userData.id;
 
   // Check ownership
-  const rows = await supabaseQuery(env, `uploads?slug=eq.${encodeURIComponent(slug)}&user_id=eq.${userId}&select=id,slug`, { method: "GET" });
+  const rows = await supabaseQuery(env, `uploads?slug=eq.${encodeURIComponent(slug)}&user_id=eq.${userId}&select=id,slug,file_size`, { method: "GET" });
   if (!rows || !rows.length) {
     return new Response(JSON.stringify({ error: "File not found or not owned by user" }), { status: 404, headers });
   }
+  const fileSize = parseNumeric(rows[0]?.file_size);
 
   // Delete from R2
   await env.BLNQ_BUCKET.delete(slug);
 
   // Delete from Supabase
   await supabaseQuery(env, `uploads?slug=eq.${encodeURIComponent(slug)}&user_id=eq.${userId}`, { method: "DELETE" });
+
+  if (fileSize > 0) {
+    await incrementProfileUsage(env, userId, -fileSize);
+  }
 
   return new Response(JSON.stringify({ success: true }), { status: 200, headers });
 }
@@ -947,6 +1279,16 @@ async function handleSetPin(request: Request, env: Env, url: URL, headers: Recor
   });
   if (!userRes.ok) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
   const userData = await userRes.json() as any;
+
+  const context = await buildUploaderContext(env, request, userData.id);
+  try {
+    ensureFeatureAllowed(context.tier, "pinProtection");
+  } catch (err: any) {
+    if (err instanceof GuardError) {
+      return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers });
+    }
+    throw err;
+  }
 
   const body = await request.json() as { pin: string };
   if (!body.pin || body.pin.length < 4 || body.pin.length > 8) {
@@ -992,6 +1334,16 @@ async function handleSetExpiry(request: Request, env: Env, url: URL, headers: Re
   if (!userRes.ok) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
   const userData = await userRes.json() as any;
 
+  const context = await buildUploaderContext(env, request, userData.id);
+  try {
+    ensureFeatureAllowed(context.tier, "customExpiry");
+  } catch (err: any) {
+    if (err instanceof GuardError) {
+      return new Response(JSON.stringify({ error: err.message }), { status: err.status, headers });
+    }
+    throw err;
+  }
+
   const body = await request.json() as { expires_in: string };
   let expiresAt: string | null = null;
   const durations: Record<string, number> = { "1h": 3600000, "24h": 86400000, "7d": 604800000, "never": 0 };
@@ -1036,7 +1388,7 @@ async function handleBundleInfo(request: Request, env: Env, url: URL, headers: R
 
   const bundle = bundles[0];
   // Fetch files in this bundle
-  const files = await supabaseQuery(env, `uploads?bundle_id=eq.${bundle.id}&select=slug,file_type,file_size,created_at`, { method: "GET" });
+  const files = await supabaseQuery(env, `uploads?bundle_id=eq.${bundle.id}&select=slug,file_type,file_size,created_at,position&order=position.asc`, { method: "GET" });
 
   const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
 
@@ -1050,8 +1402,59 @@ async function handleBundleInfo(request: Request, env: Env, url: URL, headers: R
       url: `${host}/${f.slug}`,
       file_type: f.file_type,
       file_size: f.file_size,
+      position: f.position ?? 0,
     })),
   }), { status: 200, headers });
+}
+
+async function handleBundleReorder(request: Request, env: Env, url: URL, headers: Record<string, string>): Promise<Response> {
+  const slug = url.pathname.replace("/api/bundles/", "").replace("/reorder", "");
+  const authHeader = request.headers.get("Authorization") || "";
+  const token = authHeader.replace("Bearer ", "");
+
+  if (!token) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+  }
+
+  const userRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: { "Authorization": `Bearer ${token}`, "apikey": env.SUPABASE_SERVICE_KEY || "" },
+  });
+  if (!userRes.ok) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+  }
+  const user = await userRes.json() as any;
+
+  const bundles = await supabaseQuery(env, `bundles?slug=eq.${encodeURIComponent(slug)}&select=id,user_id`, { method: "GET" });
+  if (!bundles || !bundles.length) {
+    return new Response(JSON.stringify({ error: "Bundle not found" }), { status: 404, headers });
+  }
+  const bundle = bundles[0];
+  if (bundle.user_id !== user.id) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers });
+  }
+
+  const payload = await request.json().catch(() => null) as { order?: string[] } | null;
+  const order = Array.isArray(payload?.order) ? payload!.order : null;
+  if (!order || !order.length) {
+    return new Response(JSON.stringify({ error: "order array required" }), { status: 400, headers });
+  }
+
+  const existing = await supabaseQuery(env, `uploads?bundle_id=eq.${bundle.id}&select=slug`, { method: "GET" });
+  const slugs = new Set((existing || []).map((f: any) => f.slug));
+  if (order.length !== slugs.size || !order.every((s) => slugs.has(s))) {
+    return new Response(JSON.stringify({ error: "Order must include every file slug" }), { status: 400, headers });
+  }
+
+  let position = 0;
+  for (const fileSlug of order) {
+    await supabaseQuery(env, `uploads?slug=eq.${encodeURIComponent(fileSlug)}&bundle_id=eq.${bundle.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ position }),
+    });
+    position++;
+  }
+
+  return new Response(JSON.stringify({ success: true }), { status: 200, headers });
 }
 
 async function handleFileServe(request: Request, env: Env, url: URL, corsHeaders: Record<string, string>, ctx: ExecutionContext): Promise<Response> {
