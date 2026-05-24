@@ -4,17 +4,19 @@ export interface TierLimits {
   maxFileSize: number;
   maxStorage: number;
   uploadsPerHour: number;
+  maxBundles: number;
+  maxBundleFiles: number;
 }
 
 export const TIER_LIMITS: Record<TierName, TierLimits> = {
-  guest: { maxFileSize: 400 * 1024 * 1024, maxStorage: 0, uploadsPerHour: 3 },
-  free: { maxFileSize: 400 * 1024 * 1024, maxStorage: 5 * 1024 * 1024 * 1024, uploadsPerHour: 20 },
-  pro: { maxFileSize: 2 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 100 },
-  ultimate: { maxFileSize: 5 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 500 },
+  guest: { maxFileSize: 400 * 1024 * 1024, maxStorage: 0, uploadsPerHour: 3, maxBundles: 0, maxBundleFiles: 0 },
+  free: { maxFileSize: 400 * 1024 * 1024, maxStorage: 5 * 1024 * 1024 * 1024, uploadsPerHour: 50, maxBundles: 3, maxBundleFiles: 10 },
+  pro: { maxFileSize: 2 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 1000, maxBundles: Number.MAX_SAFE_INTEGER, maxBundleFiles: 30 },
+  ultimate: { maxFileSize: 5 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 2000, maxBundles: Number.MAX_SAFE_INTEGER, maxBundleFiles: 100 },
 };
 
 export const TIER_FEATURES: Record<string, TierName[]> = {
-  bundles: ["pro", "ultimate"],
+  bundles: ["free", "pro", "ultimate"],
   pinProtection: ["pro", "ultimate"],
   customExpiry: ["pro", "ultimate"],
   scheduledDeletion: ["pro", "ultimate"],
@@ -36,13 +38,48 @@ export const TIER_FEATURES: Record<string, TierName[]> = {
   prioritySupport: ["ultimate"],
 };
 
-export const PLAN_DEFINITIONS = [
-  { id: "pro", label: "Pro", price: "$5", cadence: "Monthly" },
-  { id: "ultimate", label: "Ultimate", price: "$9.99", cadence: "Monthly" },
-  { id: "pro_yearly", label: "Pro", price: "$40", cadence: "Yearly" },
-  { id: "ultimate_yearly", label: "Ultimate", price: "$84", cadence: "Yearly" },
-  { id: "pro_lifetime", label: "Pro Lifetime", price: "$49", cadence: "One-time" },
-  { id: "ultimate_lifetime", label: "Ultimate Lifetime", price: "$99", cadence: "One-time" },
+export interface PlanDefinition {
+  id: TierName;
+  label: string;
+  price: string;
+  cadence: string;
+  description: string;
+  amountUsdCents: number;
+}
+
+export const PLAN_DEFINITIONS: PlanDefinition[] = [
+  {
+    id: "guest",
+    label: "Free Guest",
+    price: "$0",
+    cadence: "Always",
+    description: "No account required. 400MB uploads, 3 drops per day, no bundles.",
+    amountUsdCents: 0,
+  },
+  {
+    id: "free",
+    label: "Blnq Spark",
+    price: "$0",
+    cadence: "Monthly",
+    description: "Sign in for 400MB uploads, 50+ drops/day, up to 3 bundles, and 10 files each.",
+    amountUsdCents: 0,
+  },
+  {
+    id: "pro",
+    label: "Blnq Core",
+    price: "$5",
+    cadence: "Monthly",
+    description: "2GB uploads, unlimited bundles, 30 files per bundle, and creator-grade controls.",
+    amountUsdCents: 500,
+  },
+  {
+    id: "ultimate",
+    label: "Blnq Ultimate",
+    price: "$9.99",
+    cadence: "Monthly",
+    description: "5GB uploads, unlimited bundles, 100 files per bundle, APIs, vanity links, and support.",
+    amountUsdCents: 999,
+  },
 ];
 
 export function tierHasFeature(tier: TierName, feature: keyof typeof TIER_FEATURES): boolean {

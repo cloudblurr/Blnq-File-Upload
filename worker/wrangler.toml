@@ -1,6 +1,15 @@
-name = "blnq-api"
+name = "blnqmaster-worker"
+account_id = "44d53af1cbad58434c8537110e556fa5"
 main = "src/index.ts"
 compatibility_date = "2024-05-12"
+
+[[routes]]
+pattern = "www.blnq.click/api/*"
+zone_name = "blnq.click"
+
+[[routes]]
+pattern = "blnq.click/api/*"
+zone_name = "blnq.click"
 
 # R2 Bucket Binding
 [[r2_buckets]]
@@ -14,7 +23,7 @@ binding = "RATE_LIMIT"
 id = "f8247d4c615240d288bda761858e733d"
 
 [vars]
-PUBLIC_URL_PREFIX = "https://blnq.click"
+PUBLIC_URL_PREFIX = "https://www.blnq.click"
 ALLOWED_ORIGIN = "*"
 SUPABASE_URL = "https://qugvxnpkwekufecvfevd.supabase.co"
 SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF1Z3Z4bnBrd2VrdWZlY3ZmZXZkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTUyNDM3MywiZXhwIjoyMDk1MTAwMzczfQ.U8eNHCJStp4TnARj6mE2_C6CX6d-7FiP7UqPZYPRKRU"

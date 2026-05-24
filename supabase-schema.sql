@@ -96,6 +96,26 @@ create table if not exists public.api_keys (
 
 create index if not exists idx_api_keys_user on public.api_keys(user_id);
 
+-- Rampex payment-link audit log
+create table if not exists public.rampex_links (
+  id uuid primary key default gen_random_uuid(),
+  link_id text unique not null,
+  user_id uuid references auth.users on delete set null,
+  plan text not null default 'free',
+  status text not null default 'pending',
+  amount numeric(10,2) not null default 0,
+  currency text not null default 'USD',
+  email text,
+  checkout_url text,
+  short_url text,
+  paid_at timestamptz,
+  raw_payload jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_rampex_links_user on public.rampex_links(user_id);
+create index if not exists idx_rampex_links_status on public.rampex_links(status);
+
 -- Bundle reactions
 create table if not exists public.bundle_reactions (
   id uuid primary key default gen_random_uuid(),
@@ -172,51 +192,56 @@ alter table public.api_keys enable row level security;
 alter table public.vanity_urls enable row level security;
 alter table public.bundle_comments enable row level security;
 alter table public.bundle_reactions enable row level security;
+alter table public.rampex_links enable row level security;
 
 -- Profiles policies
-create policy if not exists "Profiles are viewable by owner" on public.profiles
+create policy "Profiles are viewable by owner" on public.profiles
   for select using (auth.uid() = id);
-create policy if not exists "Profiles are updatable by owner" on public.profiles
+create policy "Profiles are updatable by owner" on public.profiles
   for update using (auth.uid() = id);
 
 -- Uploads policies
-create policy if not exists "Users can view their uploads" on public.uploads for select
+create policy "Users can view their uploads" on public.uploads for select
   using (auth.uid() = user_id);
-create policy if not exists "Users can insert their uploads" on public.uploads for insert
+create policy "Users can insert their uploads" on public.uploads for insert
   with check (auth.uid() = user_id);
-create policy if not exists "Users can update their uploads" on public.uploads for update
+create policy "Users can update their uploads" on public.uploads for update
   using (auth.uid() = user_id);
-create policy if not exists "Users can delete their uploads" on public.uploads for delete
+create policy "Users can delete their uploads" on public.uploads for delete
   using (auth.uid() = user_id);
 
-create policy if not exists "Anyone can read upload by slug" on public.uploads for select using (true);
+create policy "Anyone can read upload by slug" on public.uploads for select using (true);
 
 -- Bundles policies
-create policy if not exists "Users can view their bundles" on public.bundles for select
+create policy "Users can view their bundles" on public.bundles for select
   using (auth.uid() = user_id);
-create policy if not exists "Users can insert their bundles" on public.bundles for insert
+create policy "Users can insert their bundles" on public.bundles for insert
   with check (auth.uid() = user_id);
-create policy if not exists "Users can update their bundles" on public.bundles for update
+create policy "Users can update their bundles" on public.bundles for update
   using (auth.uid() = user_id);
-create policy if not exists "Users can delete their bundles" on public.bundles for delete
+create policy "Users can delete their bundles" on public.bundles for delete
   using (auth.uid() = user_id);
-create policy if not exists "Anyone can read bundle by slug" on public.bundles for select using (true);
+create policy "Anyone can read bundle by slug" on public.bundles for select using (true);
 
 -- Comments policies
-create policy if not exists "Bundle comments readable" on public.bundle_comments for select using (true);
-create policy if not exists "Bundle comments insert" on public.bundle_comments for insert with check (true);
-create policy if not exists "Bundle comments update/delete by owner" on public.bundle_comments for all using (auth.uid() = user_id);
+create policy "Bundle comments readable" on public.bundle_comments for select using (true);
+create policy "Bundle comments insert" on public.bundle_comments for insert with check (true);
+create policy "Bundle comments update/delete by owner" on public.bundle_comments for all using (auth.uid() = user_id);
 
 -- Reactions policies
-create policy if not exists "Bundle reactions readable" on public.bundle_reactions for select using (true);
-create policy if not exists "Bundle reactions insert" on public.bundle_reactions for insert with check (true);
+create policy "Bundle reactions readable" on public.bundle_reactions for select using (true);
+create policy "Bundle reactions insert" on public.bundle_reactions for insert with check (true);
 
 -- API keys policies
-create policy if not exists "API keys readable" on public.api_keys for select using (auth.uid() = user_id);
-create policy if not exists "API keys writable" on public.api_keys for all using (auth.uid() = user_id);
+create policy "API keys readable" on public.api_keys for select using (auth.uid() = user_id);
+create policy "API keys writable" on public.api_keys for all using (auth.uid() = user_id);
+
+-- Rampex links policies
+create policy "Rampex links readable by owner" on public.rampex_links for select
+  using (auth.uid() = user_id);
 
 -- Vanity URLs policies
-create policy if not exists "Vanity URLs readable" on public.vanity_urls for select using (auth.uid() = user_id);
-create policy if not exists "Vanity URLs writable" on public.vanity_urls for all using (auth.uid() = user_id);
+create policy "Vanity URLs readable" on public.vanity_urls for select using (auth.uid() = user_id);
+create policy "Vanity URLs writable" on public.vanity_urls for all using (auth.uid() = user_id);
 
 -- Note: Worker uses service_role key which bypasses RLS where necessary.

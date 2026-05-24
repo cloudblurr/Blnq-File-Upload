@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
 
-const API_URL = process.env.API_URL || "https://blnq.click";
+const API_URL = process.env.API_URL || "https://www.blnq.click";
 
 function buildTestFiles() {
   const nonce = crypto.randomBytes(4).toString("hex");

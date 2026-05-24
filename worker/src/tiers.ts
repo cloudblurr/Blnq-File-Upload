@@ -4,6 +4,8 @@ export interface TierLimits {
   maxFileSize: number;
   maxStorage: number;
   uploadsPerHour: number;
+  maxBundles: number;
+  maxBundleFiles: number;
 }
 
 export interface TierFeatureMatrix {
@@ -11,22 +13,47 @@ export interface TierFeatureMatrix {
 }
 
 export interface PlanDefinition {
-  id: TierName | "pro_lifetime" | "ultimate_lifetime";
+  id: TierName;
   label: string;
   price: string;
   billingCycle: "monthly" | "yearly" | "lifetime";
   description: string;
+  amountUsdCents: number;
 }
 
 export const TIER_LIMITS: Record<TierName, TierLimits> = {
-  guest: { maxFileSize: 400 * 1024 * 1024, maxStorage: 0, uploadsPerHour: 3 },
-  free: { maxFileSize: 400 * 1024 * 1024, maxStorage: 5 * 1024 * 1024 * 1024, uploadsPerHour: 20 },
-  pro: { maxFileSize: 2 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 100 },
-  ultimate: { maxFileSize: 5 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 500 },
+  guest: {
+    maxFileSize: 400 * 1024 * 1024,
+    maxStorage: 0,
+    uploadsPerHour: 3,
+    maxBundles: 0,
+    maxBundleFiles: 0,
+  },
+  free: {
+    maxFileSize: 400 * 1024 * 1024,
+    maxStorage: 5 * 1024 * 1024 * 1024,
+    uploadsPerHour: 50,
+    maxBundles: 3,
+    maxBundleFiles: 10,
+  },
+  pro: {
+    maxFileSize: 2 * 1024 * 1024 * 1024,
+    maxStorage: Infinity,
+    uploadsPerHour: 1000,
+    maxBundles: Number.MAX_SAFE_INTEGER,
+    maxBundleFiles: 30,
+  },
+  ultimate: {
+    maxFileSize: 5 * 1024 * 1024 * 1024,
+    maxStorage: Infinity,
+    uploadsPerHour: 2000,
+    maxBundles: Number.MAX_SAFE_INTEGER,
+    maxBundleFiles: 100,
+  },
 };
 
 export const TIER_FEATURES: TierFeatureMatrix = {
-  bundles: ["pro", "ultimate"],
+  bundles: ["free", "pro", "ultimate"],
   pinProtection: ["pro", "ultimate"],
   customExpiry: ["pro", "ultimate"],
   scheduledDeletion: ["pro", "ultimate"],
@@ -49,12 +76,38 @@ export const TIER_FEATURES: TierFeatureMatrix = {
 };
 
 export const PLAN_DEFINITIONS: PlanDefinition[] = [
-  { id: "pro", label: "Pro", price: "$5/mo", billingCycle: "monthly", description: "2TB max file size, unlimited storage, 100 uploads/hour" },
-  { id: "ultimate", label: "Ultimate", price: "$9.99/mo", billingCycle: "monthly", description: "5TB max file size, unlimited storage, 500 uploads/hour" },
-  { id: "pro", label: "Pro Annual", price: "$40/yr", billingCycle: "yearly", description: "Save 33% when billed annually" },
-  { id: "ultimate", label: "Ultimate Annual", price: "$84/yr", billingCycle: "yearly", description: "Save 30% when billed annually" },
-  { id: "pro_lifetime", label: "Pro Lifetime", price: "$49 one-time", billingCycle: "lifetime", description: "Limited to 200 seats" },
-  { id: "ultimate_lifetime", label: "Ultimate Lifetime", price: "$99 one-time", billingCycle: "lifetime", description: "Limited to 200 seats" },
+  {
+    id: "guest",
+    label: "Free Guest",
+    price: "$0",
+    billingCycle: "lifetime",
+    description: "No account required. 400MB uploads, 3 drops per day, no bundles.",
+    amountUsdCents: 0,
+  },
+  {
+    id: "free",
+    label: "Blnq Spark",
+    price: "$0",
+    billingCycle: "monthly",
+    description: "Sign in for 400MB uploads, 50+ drops/day, up to 3 bundles, and 10 files each.",
+    amountUsdCents: 0,
+  },
+  {
+    id: "pro",
+    label: "Blnq Core",
+    price: "$5/mo",
+    billingCycle: "monthly",
+    description: "2GB uploads, unlimited bundles, 30 files per bundle, and creator-only extras.",
+    amountUsdCents: 500,
+  },
+  {
+    id: "ultimate",
+    label: "Blnq Ultimate",
+    price: "$9.99/mo",
+    billingCycle: "monthly",
+    description: "5GB uploads, unlimited bundles, 100 files per bundle, priority help, APIs, and automations.",
+    amountUsdCents: 999,
+  },
 ];
 
 export function tierIncludesFeature(tier: TierName, feature: keyof typeof TIER_FEATURES): boolean {

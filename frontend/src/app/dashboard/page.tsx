@@ -6,9 +6,10 @@ import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import NextImage from "next/image";
+import { PLAN_DEFINITIONS, TierName, TIER_LIMITS } from "@/lib/tiers";
 import {
   Trash2, Lock, Unlock, Clock, Copy, Check, ExternalLink,
-  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical
+  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical, Plus
 } from "lucide-react";
 import {
   DndContext,
@@ -26,7 +27,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://blnq.click";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://www.blnq.click";
 
 interface Upload {
   id: string;
@@ -43,9 +44,25 @@ interface BundleCardProps {
   bundle: Bundle;
   sensors: ReturnType<typeof useSensors>;
   onDragEnd: (bundleSlug: string, event: DragEndEvent) => void;
+  onAppend: (bundle: Bundle, files: File[]) => void;
+  appendLoading: boolean;
+  remainingSlots: number;
 }
 
-function BundleCard({ bundle, sensors, onDragEnd }: BundleCardProps) {
+function BundleCard({ bundle, sensors, onDragEnd, onAppend, appendLoading, remainingSlots }: BundleCardProps) {
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleChooseFiles = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFilesSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files || []);
+    if (!selected.length) return;
+    onAppend(bundle, selected);
+    event.currentTarget.value = "";
+  };
+
   return (
     <div className="bg-zinc-900/40 border border-zinc-900 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-3">
@@ -53,10 +70,30 @@ function BundleCard({ bundle, sensors, onDragEnd }: BundleCardProps) {
           <p className="text-sm font-semibold text-zinc-100">{bundle.title || "Untitled Bundle"}</p>
           <p className="text-[11px] text-zinc-500 font-mono">{bundle.slug}</p>
         </div>
-        <Link href={`/b/${bundle.slug}`} className="text-xs text-indigo-400 hover:text-indigo-300">
-          View Bundle
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleChooseFiles}
+            disabled={appendLoading || remainingSlots <= 0}
+            className="px-2.5 py-1.5 rounded-lg border border-[#ff7a18]/30 text-[#ffb347] text-[11px] hover:text-white hover:border-[#ffb347]/60 disabled:opacity-45 disabled:cursor-not-allowed inline-flex items-center gap-1"
+          >
+            <Plus className="w-3 h-3" />
+            {appendLoading ? "Adding..." : "Add Files"}
+          </button>
+          <Link href={`/b/${bundle.slug}`} className="text-xs text-indigo-400 hover:text-indigo-300">
+            View Bundle
+          </Link>
+        </div>
       </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        multiple={remainingSlots > 1}
+        onChange={handleFilesSelected}
+      />
+      <p className="text-[11px] text-zinc-500 mb-3">
+        {remainingSlots > 0 ? `${remainingSlots} slot${remainingSlots > 1 ? "s" : ""} remaining` : "Bundle is at plan limit"}
+      </p>
 
       {bundle.files.length === 0 ? (
         <p className="text-xs text-zinc-500">This bundle is empty.</p>
@@ -136,8 +173,34 @@ interface Bundle {
   files: BundleFile[];
 }
 
+interface BillingSummary {
+  profile: {
+    tier: TierName;
+    subscription_status: string;
+    plan_expires_at: string | null;
+  };
+  links: Array<{
+    link_id: string;
+    plan: TierName;
+    status: string;
+    amount: number;
+    currency: string;
+    created_at: string;
+    short_url?: string | null;
+    checkout_url?: string | null;
+  }>;
+}
+
+interface BundleQueryResult {
+  id: string;
+  slug: string;
+  title: string | null;
+  created_at: string;
+  uploads: BundleFile[] | null;
+}
+
 export default function DashboardPage() {
-  const { user, session, loading: authLoading, signOut } = useAuth();
+  const { user, session, profile, loading: authLoading, signOut } = useAuth();
   const router = useRouter();
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [bundles, setBundles] = useState<Bundle[]>([]);
@@ -148,7 +211,12 @@ export default function DashboardPage() {
   const [pinValue, setPinValue] = useState("");
   const [expiryModal, setExpiryModal] = useState<string | null>(null);
   const [bundleSaving, setBundleSaving] = useState<string | null>(null);
+  const [bundleAppending, setBundleAppending] = useState<string | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
+  const [billing, setBilling] = useState<BillingSummary | null>(null);
+  const currentTier: TierName =
+    profile?.tier === "free" || profile?.tier === "pro" || profile?.tier === "ultimate" ? profile.tier : "free";
+  const bundleFileLimit = TIER_LIMITS[currentTier].maxBundleFiles;
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -164,7 +232,13 @@ export default function DashboardPage() {
     if (user) fetchData();
   }, [user]);
 
-  const fetchData = async () => {
+  useEffect(() => {
+    if (session?.access_token) {
+      fetchBilling();
+    }
+  }, [session?.access_token]);
+
+  async function fetchData() {
     setLoading(true);
     const [uploadsResp, bundlesResp] = await Promise.all([
       supabase
@@ -185,7 +259,7 @@ export default function DashboardPage() {
     }
 
     if (!bundlesResp.error && bundlesResp.data) {
-      const normalized = bundlesResp.data.map((bundle: any) => ({
+      const normalized = (bundlesResp.data as BundleQueryResult[]).map((bundle) => ({
         id: bundle.id,
         slug: bundle.slug,
         title: bundle.title,
@@ -197,7 +271,22 @@ export default function DashboardPage() {
     }
 
     setLoading(false);
-  };
+  }
+
+  async function fetchBilling() {
+    if (!session?.access_token) return;
+    try {
+      const res = await fetch(`${API_URL}/api/billing/summary`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        setBilling(data);
+      }
+    } catch {
+      // no-op
+    }
+  }
 
   const handleDelete = async (slug: string) => {
     if (!confirm("Delete this file permanently?")) return;
@@ -273,8 +362,9 @@ export default function DashboardPage() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to save order");
       }
-    } catch (err: any) {
-      setBundleError(err?.message || "Failed to save bundle order");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to save bundle order";
+      setBundleError(message);
       await fetchData();
     } finally {
       setBundleSaving(null);
@@ -297,6 +387,88 @@ export default function DashboardPage() {
       persistBundleOrder(bundle.slug, reordered.map((file: BundleFile) => file.slug));
       return { ...bundle, files: reordered };
     }));
+  };
+
+  const uploadFilesToPresignedUrls = async (
+    fileBatch: File[],
+    uploadsSigned: { slug: string; uploadUrl: string }[],
+  ) => {
+    for (let i = 0; i < uploadsSigned.length; i++) {
+      const file = fileBatch[i];
+      const uploadUrl = uploadsSigned[i].uploadUrl;
+      const putRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!putRes.ok) {
+        throw new Error(`Failed to upload ${file.name}`);
+      }
+    }
+  };
+
+  const handleAppendToBundle = async (bundle: Bundle, selectedFiles: File[]) => {
+    if (!user || !session?.access_token) return;
+    const validFiles = selectedFiles.filter((f) => f.size > 0);
+    if (!validFiles.length) {
+      setBundleError("No valid files selected.");
+      return;
+    }
+
+    const remainingSlots = Math.max(bundleFileLimit - bundle.files.length, 0);
+    if (remainingSlots <= 0) {
+      setBundleError(`This bundle reached your ${bundleFileLimit}-file plan limit.`);
+      return;
+    }
+
+    const filesToUpload = validFiles.slice(0, remainingSlots);
+    setBundleAppending(bundle.slug);
+    setBundleError(null);
+    try {
+      const signRes = await fetch(`${API_URL}/api/sign-upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "bundle",
+          user_id: user.id,
+          bundle_slug: bundle.slug,
+          files: filesToUpload.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+        }),
+      });
+      const signData = await signRes.json().catch(() => null);
+      if (!signRes.ok || !signData?.uploads) {
+        throw new Error(signData?.error || "Failed to prepare bundle upload");
+      }
+      const uploadsSigned = signData.uploads as { slug: string; uploadUrl: string }[];
+      await uploadFilesToPresignedUrls(filesToUpload, uploadsSigned);
+
+      const completeRes = await fetch(`${API_URL}/api/complete-upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "bundle",
+          bundle: {
+            slug: bundle.slug,
+            user_id: user.id,
+            title: bundle.title || undefined,
+          },
+          files: uploadsSigned.map((u, index) => ({
+            slug: u.slug,
+            file_type: filesToUpload[index].type,
+            file_size: filesToUpload[index].size,
+          })),
+        }),
+      });
+      const completeData = await completeRes.json().catch(() => null);
+      if (!completeRes.ok || !completeData?.success) {
+        throw new Error(completeData?.error || "Failed to finalize bundle updates");
+      }
+      await fetchData();
+    } catch (err: unknown) {
+      setBundleError(err instanceof Error ? err.message : "Failed to append files");
+    } finally {
+      setBundleAppending(null);
+    }
   };
 
   const copyLink = (slug: string) => {
@@ -342,15 +514,15 @@ export default function DashboardPage() {
       <header className="w-full max-w-5xl mx-auto px-6 py-6 flex items-center justify-between border-b border-[#ff7a18]/25 z-10">
         <Link href="/" className="flex items-center gap-3">
           <NextImage
-            src="/blnq0.jpg"
-            alt="Blnq sigil"
+            src="/brand-symbol.jpg"
+            alt="Blnq symbol"
             width={42}
             height={42}
             className="rounded-2xl border border-[#ff7a18]/40 shadow-[0_0_25px_rgba(255,122,24,0.35)]"
           />
           <NextImage
-            src="/logofull.png"
-            alt="Blnq wordmark"
+            src="/brand-logo.jpg"
+            alt="Blnq logo"
             width={120}
             height={46}
             className="h-9 w-auto object-contain"
@@ -472,11 +644,52 @@ export default function DashboardPage() {
         )}
 
         {/* Bundles Section */}
+        <section className="mt-10 rounded-2xl border border-[#ff7a18]/25 bg-[#0a0308]/65 p-5">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div>
+              <h2 className="text-xl font-semibold text-[#f7f4ef]">Billing</h2>
+              <p className="text-xs text-[#ffb347]/70">Rampex-powered subscription status and payment history.</p>
+            </div>
+            <Link href="/plans" className="text-xs px-3 py-2 rounded-xl border border-[#ff7a18]/30 text-[#ffb347] hover:text-[#ffd65b]">
+              Manage Plan
+            </Link>
+          </div>
+          <p className="text-sm text-zinc-300">
+            Current:{" "}
+            <span className="text-[#ffd65b] font-semibold">
+              {PLAN_DEFINITIONS.find((p) => p.id === billing?.profile?.tier)?.label || "Blnq Spark"}
+            </span>
+            {" • "}
+            <span className="uppercase text-[11px] tracking-[0.2em] text-zinc-400">{billing?.profile?.subscription_status || "inactive"}</span>
+          </p>
+          {billing?.profile?.plan_expires_at && (
+            <p className="text-xs text-zinc-400 mt-1">
+              Renews {new Date(billing.profile.plan_expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            </p>
+          )}
+          <div className="mt-4 space-y-2">
+            {(billing?.links || []).slice(0, 3).map((link) => (
+              <div key={link.link_id} className="flex items-center justify-between rounded-xl bg-black/20 border border-white/10 px-3 py-2">
+                <div>
+                  <p className="text-xs text-zinc-200">{link.plan.toUpperCase()} • ${Number(link.amount || 0).toFixed(2)} {link.currency || "USD"}</p>
+                  <p className="text-[11px] text-zinc-500">{new Date(link.created_at).toLocaleString("en-US")}</p>
+                </div>
+                <span className="text-[11px] uppercase tracking-[0.2em] text-[#ffb347]">{link.status || "pending"}</span>
+              </div>
+            ))}
+            {!billing?.links?.length && (
+              <p className="text-xs text-zinc-500">No recent payment links yet.</p>
+            )}
+          </div>
+        </section>
+
+        {/* Bundles Section */}
         <section className="mt-10">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-xl font-semibold text-[#f7f4ef]">Bundles</h2>
               <p className="text-xs text-[#ffb347]/70">Drag files to reorder gallery presentation.</p>
+              <p className="text-[11px] text-zinc-500 mt-1">Plan limit: {bundleFileLimit} files per bundle.</p>
             </div>
             {bundleSaving && (
               <span className="text-[11px] text-[#ffd65b] flex items-center gap-1">
@@ -499,6 +712,9 @@ export default function DashboardPage() {
                   bundle={bundle}
                   sensors={sensors}
                   onDragEnd={handleBundleDragEnd}
+                  onAppend={handleAppendToBundle}
+                  appendLoading={bundleAppending === bundle.slug}
+                  remainingSlots={Math.max(bundleFileLimit - bundle.files.length, 0)}
                 />
               ))}
             </div>

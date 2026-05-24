@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   UploadCloud, 
   Copy, 
@@ -28,6 +28,7 @@ import Image from "next/image";
 import { useAuth } from "@/lib/auth-context";
 import { Turnstile } from "@marsidev/react-turnstile";
 import FingerprintJS from "@fingerprintjs/fingerprintjs";
+import { TIER_LIMITS, TierName } from "@/lib/tiers";
 
 const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || "https://www.blnq.click";
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
@@ -44,7 +45,7 @@ function OpenSourceBundleIcon({ className = "w-4 h-4" }: { className?: string })
 }
 
 export default function Home() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [dragActive, setDragActive] = useState(false);
   const [uploadMode, setUploadMode] = useState<"local" | "remote">("local");
   const [file, setFile] = useState<File | null>(null);
@@ -84,6 +85,13 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   const remoteAbortRef = useRef<AbortController | null>(null);
+  const currentTier: TierName = useMemo(() => {
+    if (profile?.tier === "pro" || profile?.tier === "ultimate" || profile?.tier === "free") {
+      return profile.tier;
+    }
+    return user ? "free" : "guest";
+  }, [profile?.tier, user]);
+  const bundleFileLimit = TIER_LIMITS[currentTier].maxBundleFiles || 0;
 
   // Load customized API endpoint from localStorage if exists
   useEffect(() => {
@@ -112,6 +120,13 @@ export default function Home() {
       setFiles([]);
     }
   }, [uploadMode]);
+
+  useEffect(() => {
+    if (bundleFileLimit <= 0 && bundleMode) {
+      setBundleMode(false);
+      setFiles([]);
+    }
+  }, [bundleFileLimit, bundleMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -217,8 +232,13 @@ export default function Home() {
         signal: controller.signal,
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) {
+        if (data?.code === "REMOTE_SOURCE_BLOCKED") {
+          throw new Error(
+            "Source site blocked Blnq from fetching that URL (401/403/429). Try a direct media CDN URL, or download then upload locally."
+          );
+        }
         throw new Error(data.error || "Remote upload failed");
       }
 
@@ -227,11 +247,11 @@ export default function Home() {
       setResultSize(typeof data.file_size === "number" ? data.file_size : null);
       setUploadProgress(100);
       setUploadStatus("success");
-    } catch (err: any) {
-      if (err?.name === "AbortError") {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
         setErrorMessage("Remote upload cancelled");
       } else {
-        setErrorMessage(err?.message || "Remote upload failed");
+        setErrorMessage(err instanceof Error ? err.message : "Remote upload failed");
       }
       setUploadStatus("error");
     } finally {
@@ -265,7 +285,7 @@ export default function Home() {
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       if (bundleMode) {
-        const droppedFiles = Array.from(e.dataTransfer.files).slice(0, 20);
+        const droppedFiles = Array.from(e.dataTransfer.files).slice(0, bundleFileLimit || 1);
         handleFilesSelected(droppedFiles);
       } else {
         handleFileSelected(e.dataTransfer.files[0]);
@@ -278,7 +298,7 @@ export default function Home() {
     e.preventDefault();
     if (e.target.files && e.target.files.length > 0) {
       if (bundleMode) {
-        const selectedFiles = Array.from(e.target.files).slice(0, 20);
+        const selectedFiles = Array.from(e.target.files).slice(0, bundleFileLimit || 1);
         handleFilesSelected(selectedFiles);
       } else {
         handleFileSelected(e.target.files[0]);
@@ -317,7 +337,7 @@ export default function Home() {
           seen.add(key);
         }
       }
-      return merged.slice(0, 20);
+      return merged.slice(0, bundleFileLimit || 1);
     });
     setFile(null);
     setUploadProgress(0);
@@ -756,7 +776,7 @@ export default function Home() {
           )}
 
           {/* Bundle Toggle */}
-          {uploadStatus === "idle" && uploadMode === "local" && !file && files.length === 0 && (
+          {uploadStatus === "idle" && uploadMode === "local" && !file && files.length === 0 && bundleFileLimit > 0 && (
             <div className="mb-4 flex items-center justify-between">
               <button
                 onClick={() => setBundleMode(!bundleMode)}
@@ -767,7 +787,7 @@ export default function Home() {
                 }`}
               >
                 <OpenSourceBundleIcon className="w-3.5 h-3.5" />
-                {bundleMode ? "Bundle Mode (up to 20)" : "Create Bundle"}
+                {bundleMode ? `Bundle Mode (up to ${bundleFileLimit})` : "Create Bundle"}
               </button>
             </div>
           )}
@@ -790,13 +810,13 @@ export default function Home() {
                 <UploadCloud className="w-7 h-7" />
               </div>
               <p className="text-sm font-semibold mb-1 text-[#f7f4ef]">
-                {bundleMode ? "Drop up to 20 files" : "Drag and drop your file here"}
+                {bundleMode ? `Drop up to ${bundleFileLimit} files` : "Drag and drop your file here"}
               </p>
               <p className="text-xs text-[#ffb347]/70 mb-4">
                 or click to browse from device
               </p>
               <span className="text-[10px] text-[#ffb347]/80 bg-[#1a120e]/70 py-1 px-2.5 rounded-full border border-[#ff7a18]/30">
-                {bundleMode ? "Images & videos for gallery" : "Any file type supported"}
+                {bundleMode ? `Bundle-ready media (${bundleFileLimit} max)` : "Any file type supported"}
               </span>
             </div>
           )}
@@ -904,8 +924,9 @@ export default function Home() {
                   className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 focus:border-zinc-700 outline-none text-sm text-zinc-100"
                 />
               </div>
-              <p className="text-[10px] text-zinc-500">
-                HTTPS only, public URLs. Private-network addresses are blocked. Files are fetched through the Worker and scanned just like direct uploads.
+              <p className="text-[10px] text-zinc-500 leading-relaxed">
+                Paste a direct file URL and Blnq will fetch the media server-side, store it in Blnq, and return a new Blnq link.
+                Some sites block bot/hotlink fetches (common 401/403/429); if that happens, open the media directly or download it, then upload from device.
               </p>
 
               {pinExpiryControls}

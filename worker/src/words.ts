@@ -77,6 +77,34 @@ export const adjectives = [
   "particular", "passionate", "passive", "past", "pastel", "patchy", "patient", "patriotic", "peaceful", "peach"
 ];
 
+export const verbs = [
+  "accelerate", "adapt", "admire", "adopt", "advance", "align", "amplify", "analyze", "anchor", "animate",
+  "announce", "answer", "applaud", "apply", "approve", "arrange", "arrive", "assemble", "assist", "attract",
+  "balance", "beam", "begin", "blend", "blink", "bloom", "boost", "breathe", "build", "calculate",
+  "capture", "carve", "celebrate", "challenge", "change", "charge", "chase", "choose", "climb", "close",
+  "collide", "collect", "combine", "command", "commit", "compare", "complete", "compose", "connect", "consider",
+  "construct", "continue", "control", "convert", "cook", "copy", "correct", "create", "cruise", "cultivate",
+  "dance", "decide", "declare", "decode", "define", "deliver", "design", "develop", "discover", "discuss",
+  "display", "dive", "draft", "dream", "drive", "echo", "edit", "elevate", "embrace", "emerge",
+  "empower", "encode", "encourage", "engineer", "enhance", "enjoy", "enrich", "envision", "escape", "evolve",
+  "expand", "explore", "express", "extract", "fabricate", "feature", "feed", "finish", "flow", "focus",
+  "forge", "form", "frame", "gather", "generate", "glide", "grow", "guide", "hammer", "harmonize",
+  "hatch", "help", "highlight", "ignite", "imagine", "improve", "include", "increase", "inspire", "integrate",
+  "invent", "join", "jump", "launch", "lead", "learn", "lift", "link", "listen", "load",
+  "locate", "maintain", "manage", "map", "master", "measure", "merge", "migrate", "model", "modify",
+  "monitor", "move", "navigate", "notice", "observe", "open", "optimize", "organize", "outline", "paint",
+  "perform", "persist", "pilot", "plan", "play", "predict", "prepare", "present", "preserve", "produce",
+  "program", "project", "protect", "publish", "pulse", "pursue", "push", "reach", "read", "rebuild",
+  "record", "reduce", "refine", "reflect", "refresh", "release", "rely", "remix", "render", "repair",
+  "repeat", "replace", "report", "request", "rescue", "research", "resolve", "respond", "restore", "reveal",
+  "review", "revise", "rise", "route", "run", "scale", "scan", "schedule", "search", "secure",
+  "select", "shape", "share", "shift", "shine", "ship", "signal", "simplify", "solve", "sort",
+  "spark", "speak", "spin", "stabilize", "start", "stream", "strengthen", "structure", "study", "submit",
+  "support", "synchronize", "target", "teach", "test", "thrive", "track", "train", "transform", "translate",
+  "travel", "trigger", "tune", "unify", "unlock", "update", "upgrade", "uplift", "upload", "validate",
+  "verify", "view", "visualize", "watch", "welcome", "wire", "write", "zoom"
+];
+
 export const nouns = [
   "abacus", "abbey", "accordion", "acorn", "acrobat", "actor", "addiction", "admiral", "adventure", "advisor",
   "aerial", "aerosphere", "affliction", "afterglow", "afternoon", "agency", "agenda", "agent", "agile", "agriculture",

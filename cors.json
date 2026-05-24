@@ -1,1 +1,30 @@
-﻿{"rules":[{"allowed":{"origins":["http://localhost:3000","https://blnq.click"],"methods":["GET","HEAD","PUT","OPTIONS"],"headers":["*"]},"expose_headers":["etag","content-length","content-type","x-amz-request-id"],"max_age_seconds":86400}]}
+﻿{
+  "rules": [
+    {
+      "allowed": {
+        "methods": [
+          "GET",
+          "HEAD",
+          "PUT",
+          "POST",
+          "OPTIONS"
+        ],
+        "origins": [
+          "http://localhost:3000",
+          "https://www.blnq.click",
+          "https://blnq.click"
+        ],
+        "headers": ["*"]
+      },
+      "exposed": {
+        "headers": [
+          "etag",
+          "content-length",
+          "content-type",
+          "x-amz-request-id"
+        ]
+      },
+      "max_age": 86400
+    }
+  ]
+}

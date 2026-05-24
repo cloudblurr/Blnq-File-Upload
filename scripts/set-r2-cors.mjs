@@ -48,12 +48,12 @@ if (!apiToken || !accountId || !bucketName) {
   process.exit(1);
 }
 
-const allowedOrigins = (readEnv("R2_CORS_ALLOWED_ORIGINS") ?? "http://localhost:3000,https://blnq.click")
+const allowedOrigins = (readEnv("R2_CORS_ALLOWED_ORIGINS") ?? "http://localhost:3000,https://www.blnq.click,https://blnq.click")
   .split(",")
   .map(origin => origin.trim())
   .filter(Boolean);
 
-const allowedMethods = (readEnv("R2_CORS_ALLOWED_METHODS") ?? "GET,HEAD,PUT,OPTIONS")
+const allowedMethods = (readEnv("R2_CORS_ALLOWED_METHODS") ?? "GET,HEAD,PUT,POST,OPTIONS")
   .split(",")
   .map(method => method.trim().toUpperCase())
   .filter(Boolean);
@@ -133,6 +133,19 @@ function handleApiResponse(rawOutput) {
   }
 }
 
+function hasApiErrors(result) {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  if (result.success === false) {
+    return true;
+  }
+  if (Array.isArray(result.errors) && result.errors.length) {
+    return true;
+  }
+  return false;
+}
+
 function applyCors() {
   console.log(`Updating CORS rules for bucket "${bucketName}" on account ${accountId}...`);
   const payloadXml = buildCorsXml(corsRule);
@@ -151,7 +164,7 @@ $response | ConvertTo-Json -Depth 5
 
   const putOutput = runPowerShell(putCommand);
   const putResult = handleApiResponse(putOutput);
-  if (!putResult.success) {
+  if (hasApiErrors(putResult)) {
     throw new Error(`Cloudflare API PUT failed: ${JSON.stringify(putResult.errors || putResult, null, 2)}`);
   }
   console.log("✔️  CORS configuration updated. Fetching current rules to verify...");
@@ -164,11 +177,15 @@ $response | ConvertTo-Json -Depth 5
 
   const getOutput = runPowerShell(getCommand);
   const getResult = handleApiResponse(getOutput);
-  if (!getResult.success) {
+  if (hasApiErrors(getResult)) {
     throw new Error(`Cloudflare API GET failed: ${JSON.stringify(getResult.errors || getResult, null, 2)}`);
   }
 
-  console.log(JSON.stringify(getResult.result, null, 2));
+  if (getResult.result) {
+    console.log(JSON.stringify(getResult.result, null, 2));
+  } else {
+    console.log(JSON.stringify(getResult, null, 2));
+  }
 }
 
 try {
