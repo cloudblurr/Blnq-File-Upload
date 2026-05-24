@@ -13,15 +13,35 @@ import {
   ExternalLink,
   ChevronRight,
   Lock,
-  Layers,
   User,
-  LogIn
+  LogIn,
+  HardDrive,
+  Globe,
+  FolderPlus,
+  X,
+  Plus,
+  RotateCcw,
+  ArrowUpFromLine
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { useAuth } from "@/lib/auth-context";
+import { Turnstile } from "@marsidev/react-turnstile";
+import FingerprintJS from "@fingerprintjs/fingerprintjs";
 
-const DEFAULT_API_URL = "https://blnq.click";
+const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || "https://www.blnq.click";
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
+
+function OpenSourceBundleIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M3.5 7.5H20.5V18.5H3.5V7.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 7.5L10 4.5H14L16 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 12H16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.2" opacity="0.45" />
+    </svg>
+  );
+}
 
 export default function Home() {
   const { user } = useAuth();
@@ -57,6 +77,9 @@ export default function Home() {
   // Remote upload mode
   const [remoteUrl, setRemoteUrl] = useState("");
   const [remoteFilename, setRemoteFilename] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [fpHash, setFpHash] = useState<string>("anonymous");
+  const [fpLoading, setFpLoading] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
@@ -90,6 +113,41 @@ export default function Home() {
     }
   }, [uploadMode]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof window === "undefined") return () => undefined;
+    (async () => {
+      try {
+        const fp = await FingerprintJS.load();
+        const result = await fp.get();
+        const encoder = new TextEncoder();
+        const data = encoder.encode(result.visitorId);
+        const digest = await crypto.subtle.digest("SHA-256", data);
+        const hashArray = Array.from(new Uint8Array(digest));
+        const hash = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+        if (!cancelled) {
+          setFpHash(hash);
+        }
+      } catch {
+        if (!cancelled) {
+          setFpHash("anonymous");
+        }
+      } finally {
+        if (!cancelled) {
+          setFpLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const buildRequestHeaders = () => ({
+    "Content-Type": "application/json",
+    ...(fpHash ? { "x-fp-hash": fpHash } : {}),
+  });
+
   const saveSettings = (e: React.FormEvent) => {
     e.preventDefault();
     let formattedUrl = tempApiUrl.trim();
@@ -101,8 +159,37 @@ export default function Home() {
     setShowSettings(false);
   };
 
+  const isGuest = !user;
+  const guestVerificationBlocked = isGuest && (!turnstileToken || fpLoading);
+  const guestSecurityBlock = isGuest ? (
+    <div className="bg-[#050205]/70 border border-[#ff7a18]/25 rounded-2xl p-3 space-y-3">
+      <div className="text-[11px] text-zinc-300 leading-relaxed">
+        <p className="font-semibold text-[#ffb347]">Guest safety check</p>
+        <p>Complete the Turnstile challenge to prove you&apos;re human. Guests are limited to 3 uploads per 24h — create a free account to remove the limit.</p>
+        {fpLoading && <p className="text-[10px] text-zinc-500 mt-1">Preparing fingerprint hash…</p>}
+      </div>
+      {TURNSTILE_SITE_KEY ? (
+        <div className="bg-[#0f050a] border border-[#ff7a18]/30 rounded-xl px-3 py-2">
+          <Turnstile
+            siteKey={TURNSTILE_SITE_KEY}
+            onSuccess={token => setTurnstileToken(token)}
+            onExpire={() => setTurnstileToken(null)}
+            onError={() => setTurnstileToken(null)}
+          />
+        </div>
+      ) : (
+        <p className="text-xs text-red-400">Turnstile site key missing. Set NEXT_PUBLIC_TURNSTILE_SITE_KEY.</p>
+      )}
+    </div>
+  ) : null;
+
   const uploadRemoteUrl = async () => {
     if (!remoteUrl.trim()) return;
+    if (guestVerificationBlocked) {
+      setErrorMessage("Please complete the guest security checks before uploading.");
+      setUploadStatus("error");
+      return;
+    }
 
     setUploadStatus("uploading");
     setUploadProgress(15);
@@ -118,13 +205,14 @@ export default function Home() {
     try {
       const res = await fetch(`${apiUrl}/api/remote-upload`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildRequestHeaders(),
         body: JSON.stringify({
           url: remoteUrl.trim(),
           filename: remoteFilename.trim() || undefined,
           user_id: user?.id,
           pin: pinEnabled ? pinValue : undefined,
           expires_in: expiresIn || undefined,
+          turnstile_token: turnstileToken || undefined,
         }),
         signal: controller.signal,
       });
@@ -219,7 +307,18 @@ export default function Home() {
       setUploadStatus("error");
       return;
     }
-    setFiles(validFiles);
+    setFiles((prev) => {
+      const seen = new Set(prev.map((f) => `${f.name}:${f.size}:${f.lastModified}`));
+      const merged = [...prev];
+      for (const nextFile of validFiles) {
+        const key = `${nextFile.name}:${nextFile.size}:${nextFile.lastModified}`;
+        if (!seen.has(key)) {
+          merged.push(nextFile);
+          seen.add(key);
+        }
+      }
+      return merged.slice(0, 20);
+    });
     setFile(null);
     setUploadProgress(0);
     setUploadStatus("idle");
@@ -230,6 +329,11 @@ export default function Home() {
   const uploadFile = async () => {
     const fileBatch = bundleMode ? files : file ? [file] : [];
     if (!fileBatch.length) return;
+    if (guestVerificationBlocked) {
+      setErrorMessage("Please complete the guest security checks before uploading.");
+      setUploadStatus("error");
+      return;
+    }
 
     setUploadStatus("uploading");
     setUploadProgress(0);
@@ -247,8 +351,11 @@ export default function Home() {
 
       const signRes = await fetch(`${apiUrl}/api/sign-upload`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(signPayload),
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({
+          ...signPayload,
+          turnstile_token: turnstileToken || undefined,
+        }),
       });
 
       if (!signRes.ok) {
@@ -295,7 +402,7 @@ export default function Home() {
 
       const completeRes = await fetch(`${apiUrl}/api/complete-upload`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildRequestHeaders(),
         body: JSON.stringify(completePayload),
       });
 
@@ -392,6 +499,11 @@ export default function Home() {
     fileInputRef.current?.click();
   };
 
+  const chooseMoreAfterSuccess = () => {
+    resetUploader();
+    setTimeout(() => fileInputRef.current?.click(), 0);
+  };
+
   const resetUploader = () => {
     setFile(null);
     setFiles([]);
@@ -476,16 +588,16 @@ export default function Home() {
       <header className="w-full max-w-5xl mx-auto px-6 py-6 flex items-center justify-between border-b border-[#ff7a18]/25 z-10">
         <div className="flex items-center gap-3">
           <Image
-            src="/blnq0.jpg"
-            alt="Blnq Sigil"
+            src="/brand-symbol.jpg"
+            alt="Blnq symbol"
             width={48}
             height={48}
             className="rounded-2xl border border-[#ff7a18]/40 shadow-[0_0_25px_rgba(255,122,24,0.35)]"
             priority
           />
           <Image
-            src="/logofull.png"
-            alt="Blnq wordmark"
+            src="/brand-logo.jpg"
+            alt="Blnq logo"
             width={140}
             height={48}
             className="h-10 w-auto object-contain drop-shadow-[0_12px_30px_rgba(0,0,0,0.45)]"
@@ -550,7 +662,7 @@ export default function Home() {
                 <input 
                   type="url"
                   required
-                  placeholder="https://blnq.click"
+                  placeholder="https://www.blnq.click"
                   value={tempApiUrl}
                   onChange={(e) => setTempApiUrl(e.target.value)}
                   className="w-full px-3.5 py-2 rounded-lg bg-[#050205] border border-[#ff7a18]/25 focus:border-[#ffb347]/60 focus:ring-1 focus:ring-[#ffb347]/40 outline-none text-sm text-[#f7f4ef] transition-all font-mono"
@@ -561,14 +673,20 @@ export default function Home() {
                   type="submit"
                   className="flex-1 py-1.5 px-3 rounded-lg bg-gradient-to-r from-[#ff7a18] to-[#ffb347] hover:from-[#ff8c2f] hover:to-[#ffd65b] text-[#1a120e] font-semibold text-xs transition-colors cursor-pointer shadow-[0_10px_25px_rgba(255,122,24,0.35)]"
                 >
-                  Save Endpoint
+                  <span className="inline-flex items-center gap-1.5">
+                    <Check className="w-3.5 h-3.5" />
+                    Save Endpoint
+                  </span>
                 </button>
                 <button
                   type="button"
                   onClick={resetSettings}
                   className="py-1.5 px-3 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] text-xs transition-colors cursor-pointer"
                 >
-                  Reset Default
+                  <span className="inline-flex items-center gap-1.5">
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reset Default
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -578,7 +696,10 @@ export default function Home() {
                   }}
                   className="py-1.5 px-3 rounded-lg bg-transparent border border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] text-xs transition-colors cursor-pointer"
                 >
-                  Cancel
+                  <span className="inline-flex items-center gap-1.5">
+                    <X className="w-3.5 h-3.5" />
+                    Cancel
+                  </span>
                 </button>
               </div>
               </form>
@@ -613,7 +734,10 @@ export default function Home() {
                     : "bg-[#050205] border-[#ff7a18]/20 text-[#ffb347]/60 hover:text-[#f7f4ef]"
                 }`}
               >
-                Device Files
+                <span className="inline-flex items-center gap-1.5">
+                  <HardDrive className="w-3.5 h-3.5" />
+                  Device Files
+                </span>
               </button>
               <button
                 onClick={() => setUploadMode("remote")}
@@ -623,7 +747,10 @@ export default function Home() {
                     : "bg-[#050205] border-[#ff7a18]/20 text-[#ffb347]/60 hover:text-[#f7f4ef]"
                 }`}
               >
-                Remote URL
+                <span className="inline-flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5" />
+                  Remote URL
+                </span>
               </button>
             </div>
           )}
@@ -639,7 +766,7 @@ export default function Home() {
                     : "bg-[#050205] border-[#ff7a18]/20 text-[#ffb347]/60 hover:text-[#f7f4ef] hover:border-[#ffb347]/40"
                 }`}
               >
-                <Layers className="w-3.5 h-3.5" />
+                <OpenSourceBundleIcon className="w-3.5 h-3.5" />
                 {bundleMode ? "Bundle Mode (up to 20)" : "Create Bundle"}
               </button>
             </div>
@@ -679,9 +806,9 @@ export default function Home() {
             <div className="space-y-4">
               {file && !bundleMode && (
                 <div className="p-4 bg-[#050205]/70 rounded-2xl border border-[#ff7a18]/25 flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-[#1a120e] border border-[#ff7a18]/40 text-[#ffb347]">
-                    <File className="w-5 h-5" />
-                  </div>
+                <div className="p-2.5 rounded-xl bg-[#1a120e] border border-[#ff7a18]/40 text-[#ffb347]">
+                  <File className="w-5 h-5" />
+                </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-[#f7f4ef] truncate" title={file.name}>
                       {file.name}
@@ -697,6 +824,13 @@ export default function Home() {
                     <span className="text-xs font-semibold text-[#f7f4ef]">{files.length} file{files.length > 1 ? "s" : ""} selected</span>
                     <span className="text-[10px] text-[#ffb347]/70">{formatBytes(files.reduce((a, f) => a + f.size, 0))} total</span>
                   </div>
+                  <button
+                    onClick={triggerFileInput}
+                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#ff7a18]/25 bg-[#050205] px-3 py-2 text-xs text-[#ffb347] hover:text-[#f7f4ef] hover:border-[#ffb347]/50 transition-all cursor-pointer"
+                  >
+                    <FolderPlus className="w-3.5 h-3.5" />
+                    Add More Files
+                  </button>
                   <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
                     {files.map((f, i) => (
                       <div key={i} className="p-2 bg-[#050205]/60 rounded-lg border border-[#ff7a18]/20 flex items-center gap-2 text-xs">
@@ -717,20 +851,23 @@ export default function Home() {
               )}
 
               {pinExpiryControls}
+              {guestSecurityBlock}
 
               <div className="flex gap-3">
                 <button
                   onClick={uploadFile}
-                  disabled={pinEnabled && pinValue.length < 4}
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-indigo-500/10 hover:shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  disabled={(pinEnabled && pinValue.length < 4) || guestVerificationBlocked}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ffb347] hover:from-[#ff8c2f] hover:to-[#ffd65b] text-[#1a120e] font-semibold text-sm shadow-[0_14px_34px_rgba(255,122,24,0.32)] transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
+                  <ArrowUpFromLine className="w-4 h-4" />
                   {bundleMode ? "Upload Bundle" : "Upload to Blnq"}
                   <ChevronRight className="w-4 h-4" />
                 </button>
                 <button
                   onClick={resetUploader}
-                  className="py-3 px-4 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-sm font-medium transition-all cursor-pointer"
+                  className="py-3 px-4 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-sm font-medium transition-all cursor-pointer inline-flex items-center gap-1.5"
                 >
+                  <X className="w-4 h-4" />
                   Cancel
                 </button>
               </div>
@@ -772,20 +909,23 @@ export default function Home() {
               </p>
 
               {pinExpiryControls}
+              {guestSecurityBlock}
 
               <div className="flex gap-3">
                 <button
                   onClick={uploadRemoteUrl}
-                  disabled={!remoteUrl.trim() || (pinEnabled && pinValue.length < 4)}
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-indigo-500/10 hover:shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  disabled={!remoteUrl.trim() || (pinEnabled && pinValue.length < 4) || guestVerificationBlocked}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ffb347] hover:from-[#ff8c2f] hover:to-[#ffd65b] text-[#1a120e] font-semibold text-sm shadow-[0_14px_34px_rgba(255,122,24,0.32)] transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
+                  <ArrowUpFromLine className="w-4 h-4" />
                   Fetch & Upload
                   <ChevronRight className="w-4 h-4" />
                 </button>
                 <button
                   onClick={resetUploader}
-                  className="py-3 px-4 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-sm font-medium transition-all cursor-pointer"
+                  className="py-3 px-4 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-sm font-medium transition-all cursor-pointer inline-flex items-center gap-1.5"
                 >
+                  <X className="w-4 h-4" />
                   Cancel
                 </button>
               </div>
@@ -815,8 +955,9 @@ export default function Home() {
                 <span className="truncate max-w-[200px]">{uploadingName || "Preparing..."}</span>
                 <button 
                   onClick={cancelUpload}
-                  className="text-red-400 hover:text-red-300 transition-colors font-semibold"
+                  className="text-red-400 hover:text-red-300 transition-colors font-semibold inline-flex items-center gap-1.5"
                 >
+                  <X className="w-3.5 h-3.5" />
                   Cancel upload
                 </button>
               </div>
@@ -882,9 +1023,17 @@ export default function Home() {
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
                 <button
-                  onClick={resetUploader}
-                  className="flex-1 py-2.5 px-4 bg-zinc-900 hover:bg-zinc-800/80 text-zinc-300 hover:text-zinc-100 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                  onClick={chooseMoreAfterSuccess}
+                  className="flex-1 py-2.5 px-4 bg-[#1a120e] hover:bg-[#24170f] border border-[#ff7a18]/30 hover:border-[#ffb347]/60 text-[#ffb347] hover:text-[#ffd65b] rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center justify-center gap-1.5"
                 >
+                  <Plus className="w-3.5 h-3.5" />
+                  Upload More
+                </button>
+                <button
+                  onClick={resetUploader}
+                  className="flex-1 py-2.5 px-4 bg-zinc-900 hover:bg-zinc-800/80 text-zinc-300 hover:text-zinc-100 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center justify-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
                   Upload New
                 </button>
               </div>
@@ -914,8 +1063,9 @@ export default function Home() {
                 </button>
                 <button
                   onClick={resetUploader}
-                  className="py-3 px-4 bg-zinc-950 border border-zinc-900 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                  className="py-3 px-4 bg-zinc-950 border border-zinc-900 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5"
                 >
+                  <X className="w-3.5 h-3.5" />
                   Cancel
                 </button>
               </div>
