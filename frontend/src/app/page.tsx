@@ -5,7 +5,7 @@ import {
   UploadCloud, 
   Copy, 
   Check, 
-  File, 
+  File as FileIcon, 
   Settings, 
   AlertTriangle, 
   RefreshCw, 
@@ -21,7 +21,8 @@ import {
   X,
   Plus,
   RotateCcw,
-  ArrowUpFromLine
+  ArrowUpFromLine,
+  Code2
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -58,6 +59,10 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [resultType, setResultType] = useState<"file" | "bundle">("file");
+  const [resultQrUrl, setResultQrUrl] = useState<string>("");
+  const [resultMime, setResultMime] = useState<string>("");
+  const [showEmbedModal, setShowEmbedModal] = useState(false);
+  const [pastedNotice, setPastedNotice] = useState("");
   
   // Bundle mode
   const [bundleMode, setBundleMode] = useState(false);
@@ -158,6 +163,26 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return () => undefined;
+    const onPaste = (event: ClipboardEvent) => {
+      if (uploadMode !== "local" || uploadStatus !== "idle" || bundleMode) return;
+      const clipboard = event.clipboardData;
+      if (!clipboard?.items?.length) return;
+      const imageItem = Array.from(clipboard.items).find((item) => item.type.startsWith("image/"));
+      if (!imageItem) return;
+      const blob = imageItem.getAsFile();
+      if (!blob) return;
+      const ext = blob.type.split("/")[1] || "png";
+      const pastedFile = new File([blob], `clipboard-${Date.now()}.${ext}`, { type: blob.type });
+      handleFileSelected(pastedFile);
+      setPastedNotice("Clipboard image captured. Review and click Upload to Blnq.");
+      window.setTimeout(() => setPastedNotice(""), 3500);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [uploadMode, uploadStatus, bundleMode]);
+
   const buildRequestHeaders = () => ({
     "Content-Type": "application/json",
     ...(fpHash ? { "x-fp-hash": fpHash } : {}),
@@ -213,6 +238,8 @@ export default function Home() {
     setResultFilename("");
     setResultSize(null);
     setResultType("file");
+    setResultQrUrl("");
+    setResultMime("");
 
     const controller = new AbortController();
     remoteAbortRef.current = controller;
@@ -245,6 +272,8 @@ export default function Home() {
       setResultUrl(data.url);
       setResultFilename(data.filename || data.key);
       setResultSize(typeof data.file_size === "number" ? data.file_size : null);
+      setResultQrUrl(data.qr_url || "");
+      setResultMime(data.content_type || "");
       setUploadProgress(100);
       setUploadStatus("success");
     } catch (err: unknown) {
@@ -362,10 +391,13 @@ export default function Home() {
     setResultFilename("");
     setResultType(bundleMode ? "bundle" : "file");
     setResultSize(null);
+    setResultQrUrl("");
+    setResultMime("");
 
     try {
       const signPayload = {
         mode: bundleMode ? "bundle" : "single",
+        user_id: user?.id,
         files: fileBatch.map((f) => ({ name: f.name, type: f.type, size: f.size })),
       };
 
@@ -438,11 +470,14 @@ export default function Home() {
         setResultUrl(shareUrl);
         setResultFilename(slug);
         setResultType("bundle");
+        setResultQrUrl(completeData.qr_url || "");
       } else {
         setResultUrl(completeData.url);
         setResultFilename(completeData.filename || completeData.key);
         setResultType("file");
         setResultSize(fileBatch[0]?.size ?? null);
+        setResultQrUrl(completeData.qr_url || "");
+        setResultMime(fileBatch[0]?.type || "");
       }
 
       setUploadStatus("success");
@@ -533,6 +568,8 @@ export default function Home() {
     setResultFilename("");
     setResultType("file");
     setResultSize(null);
+    setResultQrUrl("");
+    setResultMime("");
     setErrorMessage("");
     setPinEnabled(false);
     setPinValue("");
@@ -597,6 +634,26 @@ export default function Home() {
     : bundleMode && files.length
       ? `${files.length} file${files.length > 1 ? "s" : ""}`
       : file?.name;
+  const resultIsImage = resultMime.startsWith("image/");
+  const resultIsVideo = resultMime.startsWith("video/");
+  const resultIsAudio = resultMime.startsWith("audio/");
+  const embedSource = resultUrl;
+  const appOrigin = typeof window !== "undefined" ? window.location.origin : "";
+  const embedCodes = {
+    direct: embedSource,
+    markdown: resultIsImage ? `![${resultFilename}](${embedSource})` : `[${resultFilename}](${embedSource})`,
+    bbcode: resultIsImage ? `[img]${embedSource}[/img]` : `[url=${embedSource}]${resultFilename}[/url]`,
+    html: resultIsImage
+      ? `<img src="${embedSource}" alt="${resultFilename}" />`
+      : resultIsVideo
+        ? `<video src="${embedSource}" controls></video>`
+        : resultIsAudio
+          ? `<audio src="${embedSource}" controls></audio>`
+          : `<a href="${embedSource}">${resultFilename}</a>`,
+    iframe: resultType === "bundle"
+      ? `<iframe src="${appOrigin}/b/${resultFilename}" loading="lazy"></iframe>`
+      : `<iframe src="${appOrigin}/f/${resultFilename}" loading="lazy"></iframe>`,
+  };
 
   return (
     <div className="flex flex-col min-h-screen text-[#f7f4ef] font-sans selection:bg-[#ff7a18]/40 selection:text-white overflow-hidden relative">
@@ -815,6 +872,7 @@ export default function Home() {
               <p className="text-xs text-[#ffb347]/70 mb-4">
                 or click to browse from device
               </p>
+              <p className="text-[10px] text-zinc-500 mb-3">Tip: paste a screenshot with Ctrl/Cmd+V.</p>
               <span className="text-[10px] text-[#ffb347]/80 bg-[#1a120e]/70 py-1 px-2.5 rounded-full border border-[#ff7a18]/30">
                 {bundleMode ? `Bundle-ready media (${bundleFileLimit} max)` : "Any file type supported"}
               </span>
@@ -827,7 +885,7 @@ export default function Home() {
               {file && !bundleMode && (
                 <div className="p-4 bg-[#050205]/70 rounded-2xl border border-[#ff7a18]/25 flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-[#1a120e] border border-[#ff7a18]/40 text-[#ffb347]">
-                  <File className="w-5 h-5" />
+                  <FileIcon className="w-5 h-5" />
                 </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-[#f7f4ef] truncate" title={file.name}>
@@ -854,7 +912,7 @@ export default function Home() {
                   <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
                     {files.map((f, i) => (
                       <div key={i} className="p-2 bg-[#050205]/60 rounded-lg border border-[#ff7a18]/20 flex items-center gap-2 text-xs">
-                        <File className="w-3 h-3 text-[#ffb347] shrink-0" />
+                        <FileIcon className="w-3 h-3 text-[#ffb347] shrink-0" />
                         <span className="text-[#f7f4ef] truncate flex-1">{f.name}</span>
                         <span className="text-[#ffb347]/70 shrink-0">{formatBytes(f.size)}</span>
                       </div>
@@ -871,6 +929,7 @@ export default function Home() {
               )}
 
               {pinExpiryControls}
+              {pastedNotice && <p className="text-[11px] text-emerald-300">{pastedNotice}</p>}
               {guestSecurityBlock}
 
               <div className="flex gap-3">
@@ -930,6 +989,7 @@ export default function Home() {
               </p>
 
               {pinExpiryControls}
+              {pastedNotice && <p className="text-[11px] text-emerald-300">{pastedNotice}</p>}
               {guestSecurityBlock}
 
               <div className="flex gap-3">
@@ -1001,7 +1061,7 @@ export default function Home() {
               {/* File details card */}
               <div className="p-3 bg-zinc-950/60 rounded-xl border border-zinc-800/40 flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2 truncate pr-2">
-                  <File className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                  <FileIcon className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                   <span className="font-mono text-zinc-400 truncate" title={resultFilename}>
                     {resultFilename}
                   </span>
@@ -1057,7 +1117,30 @@ export default function Home() {
                   <RotateCcw className="w-3.5 h-3.5" />
                   Upload New
                 </button>
+                <button
+                  onClick={() => setShowEmbedModal(true)}
+                  className="flex-1 py-2.5 px-4 bg-zinc-900 hover:bg-zinc-800/80 text-zinc-300 hover:text-zinc-100 rounded-xl text-xs font-semibold transition-all cursor-pointer inline-flex items-center justify-center gap-1.5"
+                >
+                  <Code2 className="w-3.5 h-3.5" />
+                  Embed
+                </button>
               </div>
+              {resultQrUrl && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+                  <p className="text-xs font-semibold text-zinc-300 mb-2">Share QR</p>
+                  <div className="flex items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={resultQrUrl} alt="QR code for share URL" className="w-20 h-20 rounded-md border border-zinc-800 bg-white p-1" />
+                    <a
+                      href={resultQrUrl}
+                      download={`${resultFilename || "share"}-qr.png`}
+                      className="text-xs px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white transition-all"
+                    >
+                      Download QR
+                    </a>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1106,6 +1189,36 @@ export default function Home() {
       <footer className="w-full text-center py-6 text-[11px] text-zinc-500 border-t border-zinc-900 z-10">
         &copy; {new Date().getFullYear()} Blnq. All signals reserved.
       </footer>
+      {showEmbedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4" onClick={() => setShowEmbedModal(false)}>
+          <div className="w-full max-w-2xl rounded-2xl border border-zinc-700 bg-zinc-950 p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-zinc-100">Embed Codes</h3>
+              <button onClick={() => setShowEmbedModal(false)} className="text-zinc-400 hover:text-zinc-200">Close</button>
+            </div>
+            {([
+              ["Direct URL", embedCodes.direct],
+              ["Markdown", embedCodes.markdown],
+              ["BBCode", embedCodes.bbcode],
+              ["HTML", embedCodes.html],
+              ["iFrame", embedCodes.iframe],
+            ] as const).map(([label, code]) => (
+              <div key={label} className="mb-3">
+                <p className="text-[11px] text-zinc-400 mb-1">{label}</p>
+                <div className="flex gap-2">
+                  <input readOnly value={code} className="flex-1 rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2 text-xs text-zinc-200 font-mono" />
+                  <button
+                    onClick={() => navigator.clipboard.writeText(code)}
+                    className="px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

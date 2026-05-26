@@ -1,5 +1,7 @@
 import { adjectives, verbs } from "./words";
 import { PLAN_DEFINITIONS, TIER_FEATURES, TIER_LIMITS, TierLimits, TierName, PlanDefinition, tierIncludesFeature } from "./tiers";
+import QRCode from "qrcode";
+import { zipSync, strToU8 } from "fflate";
 
 const DEFAULT_EXPIRY_MESSAGE = "This file is no longer available.";
 const DMCA_REMOVAL_MESSAGE = "This file is unavailable due to a DMCA takedown.";
@@ -173,6 +175,32 @@ interface Env {
   RAMPEX_BRANDED_SLUG?: string;
 }
 
+function toBase64Bytes(base64: string): Uint8Array {
+  const clean = base64.replace(/\s/g, "");
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function storeQrPng(env: Env, slug: string, shareUrl: string): Promise<string | null> {
+  try {
+    const dataUrl = await QRCode.toDataURL(shareUrl, { margin: 1, width: 256 });
+    const base64 = dataUrl.split(",")[1];
+    if (!base64) return null;
+    const key = `qr/${slug}.png`;
+    await env.BLNQ_BUCKET.put(key, toBase64Bytes(base64), {
+      httpMetadata: { contentType: "image/png" },
+      customMetadata: { kind: "qr", slug },
+    });
+    return key;
+  } catch {
+    return null;
+  }
+}
+
 function isAllowedRemoteMime(mime: string): boolean {
   if (!mime) return false;
   const allowedPrefixes = ["image/", "video/", "audio/", "application/pdf", "application/zip", "text/plain"];
@@ -221,6 +249,52 @@ async function generateUniqueSlug(env: Env, maxAttempts = 50): Promise<string> {
     }
   }
   throw new Error("Unable to generate unique slug");
+}
+
+async function generateUniqueSlugsBatch(
+  env: Env,
+  count: number,
+  reserved: Set<string> = new Set(),
+  maxPasses = 20,
+): Promise<string[]> {
+  if (count <= 0) return [];
+  const allocated: string[] = [];
+  const taken = new Set<string>(reserved);
+
+  for (let pass = 0; pass < maxPasses && allocated.length < count; pass++) {
+    const needed = count - allocated.length;
+    const candidates: string[] = [];
+    const candidateSet = new Set<string>();
+    while (candidates.length < needed * 2) {
+      const candidate = generateSlugCandidate();
+      if (!candidate || taken.has(candidate) || candidateSet.has(candidate)) continue;
+      candidateSet.add(candidate);
+      candidates.push(candidate);
+    }
+
+    if (!candidates.length) continue;
+    const inClause = candidates.join(",");
+    const [uploadRows, bundleRows] = await Promise.all([
+      supabaseQuery(env, `uploads?slug=in.(${inClause})&select=slug`, { method: "GET" }).catch(() => []),
+      supabaseQuery(env, `bundles?slug=in.(${inClause})&select=slug`, { method: "GET" }).catch(() => []),
+    ]);
+    const existing = new Set<string>([
+      ...((uploadRows || []) as Array<{ slug: string }>).map((row) => row.slug),
+      ...((bundleRows || []) as Array<{ slug: string }>).map((row) => row.slug),
+    ]);
+
+    for (const candidate of candidates) {
+      if (allocated.length >= count) break;
+      if (taken.has(candidate) || existing.has(candidate)) continue;
+      taken.add(candidate);
+      allocated.push(candidate);
+    }
+  }
+
+  if (allocated.length < count) {
+    throw new Error("Unable to allocate enough unique slugs for batch");
+  }
+  return allocated;
 }
 
 function getExtension(filename: string): string {
@@ -402,6 +476,15 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[power]}`;
 }
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
 interface ProfileRow {
   id: string;
   tier: string;
@@ -430,7 +513,9 @@ function parseNumeric(value: number | string | null | undefined): number {
 }
 
 function normalizeTier(input?: string | null): TierName {
-  const normalized = (input || "free").toLowerCase();
+  const normalized = (input || "free").trim().toLowerCase();
+  if (normalized === "core") return "pro";
+  if (normalized === "spark" || normalized === "starter") return "free";
   if (normalized === "pro" || normalized === "ultimate") {
     return normalized;
   }
@@ -916,6 +1001,16 @@ export default {
         return await handleBundleInfo(request, env, url, jsonHeaders);
       }
 
+      // ─── GET /api/bundle/:slug/zip ─── Download bundle as ZIP
+      if (request.method === "GET" && url.pathname.match(/^\/api\/bundle\/[^/]+\/zip$/)) {
+        return await handleBundleZip(request, env, url, jsonHeaders);
+      }
+
+      // ─── GET /api/qr/:slug ─── Serve QR PNG
+      if ((request.method === "GET" || request.method === "HEAD") && url.pathname.startsWith("/api/qr/")) {
+        return await handleQrServe(request, env, url, corsHeaders);
+      }
+
       // ─── GET|HEAD /api/file/:slug ─── Stream file bytes from R2 (range-capable)
       if ((request.method === "GET" || request.method === "HEAD") && url.pathname.startsWith("/api/file/")) {
         return await handleFileServe(request, env, url, corsHeaders, ctx, "/api/file/");
@@ -924,6 +1019,11 @@ export default {
       // ─── POST /api/bundles/:slug/reorder ─── Update bundle positions
       if (request.method === "POST" && url.pathname.match(/^\/api\/bundles\/[^/]+\/reorder$/)) {
         return await handleBundleReorder(request, env, url, jsonHeaders);
+      }
+
+      // ─── POST /api/bundles/:slug/title ─── Rename a bundle
+      if (request.method === "POST" && url.pathname.match(/^\/api\/bundles\/[^/]+\/title$/)) {
+        return await handleBundleRename(request, env, url, jsonHeaders);
       }
 
       // ─── GET|HEAD /:key ─── Serve file from R2 (legacy direct key access)
@@ -1119,13 +1219,12 @@ async function handleSignUpload(request: Request, env: Env, headers: Record<stri
   const presignTtl = Number(env.PRESIGN_TTL_SECONDS || 900);
   const uploads: { slug: string; uploadUrl: string }[] = [];
   const reservedSlugs = new Set<string>();
+  const publicSlugs = await generateUniqueSlugsBatch(env, files.length, reservedSlugs);
 
-  for (const file of files) {
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
     const ext = getExtension(file?.name || "file");
-    let publicSlug = await generateUniqueSlug(env);
-    while (reservedSlugs.has(publicSlug)) {
-      publicSlug = await generateUniqueSlug(env);
-    }
+    const publicSlug = publicSlugs[index];
     reservedSlugs.add(publicSlug);
     const storageKey = ext ? `${publicSlug}.${ext}` : publicSlug;
     const uploadUrl = await createPresignedUrl({
@@ -1144,10 +1243,8 @@ async function handleSignUpload(request: Request, env: Env, headers: Record<stri
     if (requestedBundleSlug) {
       bundleSlug = requestedBundleSlug;
     } else {
-      let candidate = await generateUniqueSlug(env);
-      while (reservedSlugs.has(candidate)) {
-        candidate = await generateUniqueSlug(env);
-      }
+      const [candidate] = await generateUniqueSlugsBatch(env, 1, reservedSlugs);
+      reservedSlugs.add(candidate);
       bundleSlug = candidate;
     }
   }
@@ -1218,10 +1315,19 @@ async function handleCompleteUpload(request: Request, env: Env, headers: Record<
       }
 
       const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
+      const shareUrl = `${host}/${publicSlug}`;
+      const qrKey = await storeQrPng(env, publicSlug, shareUrl);
+      if (qrKey) {
+        await supabaseQuery(env, `uploads?slug=eq.${encodeURIComponent(publicSlug)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ qr_r2_key: qrKey }),
+        }).catch(() => undefined);
+      }
       return new Response(JSON.stringify({
         success: true,
         key: publicSlug,
-        url: `${host}/${publicSlug}`,
+        url: shareUrl,
+        qr_url: `${host}/api/qr/${publicSlug}`,
         filename: publicSlug,
       }), { status: 200, headers });
     } catch (err: any) {
@@ -1271,13 +1377,14 @@ async function handleCompleteUpload(request: Request, env: Env, headers: Record<
       return new Response(JSON.stringify({ error: "Invalid bundle file key" }), { status: 400, headers });
     }
 
-    const headObjects: R2Object[] = [];
     for (const file of normalizedFiles) {
       if (!file.slug || typeof file.file_size !== "number") {
         return new Response(JSON.stringify({ error: "Invalid bundle file metadata" }), { status: 400, headers });
       }
-      headObjects.push(await ensureObjectExists(env, file.storage_key));
     }
+    const headObjects: R2Object[] = await Promise.all(
+      normalizedFiles.map((file) => ensureObjectExists(env, file.storage_key)),
+    );
 
     const actualSizes = headObjects.map((obj, idx) => obj.size ?? files[idx].file_size);
     ensureFileSizesWithinLimit(context, actualSizes);
@@ -1335,20 +1442,25 @@ async function handleCompleteUpload(request: Request, env: Env, headers: Record<
       throw new Error("Missing bundle id after upsert");
     }
 
-    for (const [index, file] of normalizedFiles.entries()) {
+    const uploadRows = normalizedFiles.map((file, index) => ({
+      slug: file.public_slug,
+      r2_key: file.storage_key,
+      user_id: bundle.user_id || null,
+      original_ext: getExtension(file.storage_key) || null,
+      file_type: file.file_type || null,
+      file_size: actualSizes[index],
+      password_hash: null,
+      bundle_id: bundleId,
+      position: nextPositionBase + index,
+    }));
+
+    // Large bundles can hit edge CPU/time limits if inserted row-by-row.
+    // Insert in chunks to keep requests bounded while reducing round trips.
+    const rowChunks = chunkArray(uploadRows, 25);
+    for (const rows of rowChunks) {
       await supabaseQuery(env, "uploads", {
         method: "POST",
-        body: JSON.stringify({
-          slug: file.public_slug,
-          r2_key: file.storage_key,
-          user_id: bundle.user_id || null,
-          original_ext: getExtension(file.storage_key) || null,
-          file_type: file.file_type || null,
-          file_size: actualSizes[index],
-          password_hash: null,
-          bundle_id: bundleId,
-          position: nextPositionBase + index,
-        }),
+        body: JSON.stringify(rows),
       });
     }
 
@@ -1358,7 +1470,13 @@ async function handleCompleteUpload(request: Request, env: Env, headers: Record<
       await incrementProfileUsage(env, context.userId, sumBytes(actualSizes));
     }
 
-    return new Response(JSON.stringify({ success: true, bundle_slug: bundle.slug }), { status: 200, headers });
+    const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
+    await storeQrPng(env, bundle.slug, `${host}/b/${bundle.slug}`);
+    return new Response(JSON.stringify({
+      success: true,
+      bundle_slug: bundle.slug,
+      qr_url: `${host}/api/qr/${bundle.slug}`,
+    }), { status: 200, headers });
   } catch (err: any) {
     if (err instanceof GuardError) {
       await deleteUploadedKeys(env, files.map((file) => file.slug));
@@ -1507,10 +1625,19 @@ async function handleRemoteUpload(request: Request, env: Env, headers: Record<st
     }
 
     const host = env.PUBLIC_URL_PREFIX || new URL(request.url).origin;
+    const shareUrl = `${host}/${publicSlug}`;
+    const qrKey = await storeQrPng(env, publicSlug, shareUrl);
+    if (qrKey) {
+      await supabaseQuery(env, `uploads?slug=eq.${encodeURIComponent(publicSlug)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ qr_r2_key: qrKey }),
+      }).catch(() => undefined);
+    }
     return new Response(JSON.stringify({
       success: true,
       key: publicSlug,
-      url: `${host}/${publicSlug}`,
+      url: shareUrl,
+      qr_url: `${host}/api/qr/${publicSlug}`,
       filename: publicSlug,
       via: "remote",
       file_size: limited.bytesWritten,
@@ -1917,6 +2044,46 @@ async function handleBundleInfo(request: Request, env: Env, url: URL, headers: R
   }), { status: 200, headers });
 }
 
+async function handleBundleZip(_request: Request, env: Env, url: URL, headers: Record<string, string>): Promise<Response> {
+  const slug = url.pathname.replace("/api/bundle/", "").replace("/zip", "");
+  const bundles = await supabaseQuery(env, `bundles?slug=eq.${encodeURIComponent(slug)}&select=id,slug,title`, { method: "GET" });
+  if (!bundles || !bundles.length) {
+    return new Response(JSON.stringify({ error: "Bundle not found" }), { status: 404, headers });
+  }
+  const bundle = bundles[0];
+  const files = await supabaseQuery(env, `uploads?bundle_id=eq.${bundle.id}&select=slug,r2_key,file_type,position&order=position.asc`, { method: "GET" });
+  if (!files || !files.length) {
+    return new Response(JSON.stringify({ error: "Bundle has no files" }), { status: 404, headers });
+  }
+
+  const zipEntries: Record<string, Uint8Array> = {};
+  let index = 1;
+  for (const file of files) {
+    const key = file.r2_key || file.slug;
+    const object = await env.BLNQ_BUCKET.get(key);
+    if (!object?.body) continue;
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    const baseName = (file.slug || key || `file-${index}`).replace(/[\\/:*?"<>|]/g, "_");
+    const fileName = baseName.includes(".") ? baseName : `${baseName}.bin`;
+    zipEntries[fileName] = bytes;
+    index++;
+  }
+
+  if (!Object.keys(zipEntries).length) {
+    return new Response(JSON.stringify({ error: "Bundle files unavailable" }), { status: 404, headers });
+  }
+
+  const readme = `Blnq Bundle: ${bundle.title || bundle.slug}\nFiles: ${Object.keys(zipEntries).length}\n`;
+  zipEntries["README.txt"] = strToU8(readme);
+  const zipBytes = zipSync(zipEntries, { level: 6 });
+
+  const downloadHeaders = new Headers(headers);
+  downloadHeaders.set("Content-Type", "application/zip");
+  downloadHeaders.set("Content-Disposition", `attachment; filename="${bundle.slug}.zip"`);
+  downloadHeaders.set("Content-Length", String(zipBytes.byteLength));
+  return new Response(zipBytes, { status: 200, headers: downloadHeaders });
+}
+
 async function handleBundleReorder(request: Request, env: Env, url: URL, headers: Record<string, string>): Promise<Response> {
   const slug = url.pathname.replace("/api/bundles/", "").replace("/reorder", "");
   const authHeader = request.headers.get("Authorization") || "";
@@ -1965,6 +2132,49 @@ async function handleBundleReorder(request: Request, env: Env, url: URL, headers
   }
 
   return new Response(JSON.stringify({ success: true }), { status: 200, headers });
+}
+
+async function handleBundleRename(request: Request, env: Env, url: URL, headers: Record<string, string>): Promise<Response> {
+  const slug = url.pathname.replace("/api/bundles/", "").replace("/title", "");
+  const authHeader = request.headers.get("Authorization") || "";
+  const token = authHeader.replace("Bearer ", "");
+
+  if (!token) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+  }
+
+  const userRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: { "Authorization": `Bearer ${token}`, "apikey": env.SUPABASE_SERVICE_KEY || "" },
+  });
+  if (!userRes.ok) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+  }
+  const user = await userRes.json() as any;
+
+  const payload = await request.json().catch(() => null) as { title?: string } | null;
+  const nextTitle = (payload?.title || "").trim();
+  if (!nextTitle) {
+    return new Response(JSON.stringify({ error: "Title is required" }), { status: 400, headers });
+  }
+  if (nextTitle.length > 120) {
+    return new Response(JSON.stringify({ error: "Title must be 120 characters or less" }), { status: 400, headers });
+  }
+
+  const bundles = await supabaseQuery(env, `bundles?slug=eq.${encodeURIComponent(slug)}&select=id,user_id`, { method: "GET" });
+  if (!bundles || !bundles.length) {
+    return new Response(JSON.stringify({ error: "Bundle not found" }), { status: 404, headers });
+  }
+  const bundle = bundles[0];
+  if (bundle.user_id !== user.id) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers });
+  }
+
+  await supabaseQuery(env, `bundles?slug=eq.${encodeURIComponent(slug)}&user_id=eq.${user.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title: nextTitle }),
+  });
+
+  return new Response(JSON.stringify({ success: true, title: nextTitle }), { status: 200, headers });
 }
 
 interface ParsedRange {
@@ -2147,4 +2357,38 @@ async function handleFileServe(
     ctx.waitUntil(cache.put(cacheKey, response.clone()));
   }
   return response;
+}
+
+async function handleQrServe(
+  request: Request,
+  env: Env,
+  url: URL,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  const rawSlug = url.pathname.replace("/api/qr/", "");
+  const slug = decodeURIComponent(rawSlug || "");
+  if (!slug) {
+    return new Response("Missing slug", { status: 400, headers: corsHeaders });
+  }
+  const key = `qr/${slug}.png`;
+  const isHead = request.method === "HEAD";
+  const object = isHead ? await env.BLNQ_BUCKET.head(key) : await env.BLNQ_BUCKET.get(key);
+  if (!object) {
+    return new Response("QR not found", { status: 404, headers: corsHeaders });
+  }
+
+  const responseHeaders = new Headers(corsHeaders);
+  if ("writeHttpMetadata" in object) {
+    object.writeHttpMetadata(responseHeaders);
+  }
+  responseHeaders.set("Content-Type", "image/png");
+  responseHeaders.set("Cache-Control", "public, max-age=86400, s-maxage=86400");
+  if ("httpEtag" in object && object.httpEtag) {
+    responseHeaders.set("etag", object.httpEtag);
+  }
+
+  if (isHead) {
+    return new Response(null, { status: 200, headers: responseHeaders });
+  }
+  return new Response((object as R2ObjectBody).body, { status: 200, headers: responseHeaders });
 }

@@ -31,3 +31,4 @@ worker/.wrangler/tmp/
 
 .vercel
 .env*.local
+.env*

@@ -9,7 +9,7 @@ import NextImage from "next/image";
 import { PLAN_DEFINITIONS, TierName, TIER_LIMITS } from "@/lib/tiers";
 import {
   Trash2, Lock, Unlock, Clock, Copy, Check, ExternalLink,
-  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical, Plus
+  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical, Plus, QrCode
 } from "lucide-react";
 import {
   DndContext,
@@ -38,6 +38,7 @@ interface Upload {
   expires_at: string | null;
   created_at: string;
   bundle_id: string | null;
+  qr_r2_key?: string | null;
 }
 
 interface BundleCardProps {
@@ -45,12 +46,20 @@ interface BundleCardProps {
   sensors: ReturnType<typeof useSensors>;
   onDragEnd: (bundleSlug: string, event: DragEndEvent) => void;
   onAppend: (bundle: Bundle, files: File[]) => void;
+  onRename: (bundleSlug: string, title: string) => Promise<void>;
   appendLoading: boolean;
+  renameLoading: boolean;
   remainingSlots: number;
 }
 
-function BundleCard({ bundle, sensors, onDragEnd, onAppend, appendLoading, remainingSlots }: BundleCardProps) {
+function BundleCard({ bundle, sensors, onDragEnd, onAppend, onRename, appendLoading, renameLoading, remainingSlots }: BundleCardProps) {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [editingTitle, setEditingTitle] = React.useState(false);
+  const [titleValue, setTitleValue] = React.useState(bundle.title || "Untitled Bundle");
+
+  React.useEffect(() => {
+    setTitleValue(bundle.title || "Untitled Bundle");
+  }, [bundle.title]);
 
   const handleChooseFiles = () => {
     fileInputRef.current?.click();
@@ -63,11 +72,53 @@ function BundleCard({ bundle, sensors, onDragEnd, onAppend, appendLoading, remai
     event.currentTarget.value = "";
   };
 
+  const handleSaveTitle = async () => {
+    const next = titleValue.trim();
+    if (!next || next === (bundle.title || "Untitled Bundle")) {
+      setEditingTitle(false);
+      return;
+    }
+    await onRename(bundle.slug, next);
+    setEditingTitle(false);
+  };
+
   return (
     <div className="bg-zinc-900/40 border border-zinc-900 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <p className="text-sm font-semibold text-zinc-100">{bundle.title || "Untitled Bundle"}</p>
+          {editingTitle ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={titleValue}
+                onChange={(e) => setTitleValue(e.target.value)}
+                className="px-2 py-1 rounded-md bg-zinc-950 border border-zinc-700 text-xs text-zinc-100"
+                maxLength={120}
+              />
+              <button
+                onClick={handleSaveTitle}
+                disabled={renameLoading}
+                className="text-[11px] text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => { setEditingTitle(false); setTitleValue(bundle.title || "Untitled Bundle"); }}
+                className="text-[11px] text-zinc-400 hover:text-zinc-200"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold text-zinc-100">{bundle.title || "Untitled Bundle"}</p>
+              <button
+                onClick={() => setEditingTitle(true)}
+                className="text-[11px] text-zinc-400 hover:text-zinc-200"
+              >
+                Edit
+              </button>
+            </div>
+          )}
           <p className="text-[11px] text-zinc-500 font-mono">{bundle.slug}</p>
         </div>
         <div className="flex items-center gap-2">
@@ -212,11 +263,15 @@ export default function DashboardPage() {
   const [expiryModal, setExpiryModal] = useState<string | null>(null);
   const [bundleSaving, setBundleSaving] = useState<string | null>(null);
   const [bundleAppending, setBundleAppending] = useState<string | null>(null);
+  const [bundleRenaming, setBundleRenaming] = useState<string | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   const [billing, setBilling] = useState<BillingSummary | null>(null);
   const currentTier: TierName =
     profile?.tier === "free" || profile?.tier === "pro" || profile?.tier === "ultimate" ? profile.tier : "free";
   const bundleFileLimit = TIER_LIMITS[currentTier].maxBundleFiles;
+  const freeStorageCap = TIER_LIMITS.free.maxStorage;
+  const usedStorage = Math.max(0, profile?.storage_used || 0);
+  const usagePercent = Math.min(100, freeStorageCap > 0 ? (usedStorage / freeStorageCap) * 100 : 0);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -471,6 +526,31 @@ export default function DashboardPage() {
     }
   };
 
+  const handleRenameBundle = async (bundleSlug: string, title: string) => {
+    if (!session?.access_token) return;
+    setBundleRenaming(bundleSlug);
+    setBundleError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/bundles/${encodeURIComponent(bundleSlug)}/title`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to rename bundle");
+      }
+      await fetchData();
+    } catch (err: unknown) {
+      setBundleError(err instanceof Error ? err.message : "Failed to rename bundle");
+    } finally {
+      setBundleRenaming(null);
+    }
+  };
+
   const copyLink = (slug: string) => {
     navigator.clipboard.writeText(`${API_URL}/${slug}`);
     setCopied(slug);
@@ -495,6 +575,7 @@ export default function DashboardPage() {
   };
 
   const formatDate = (d: string) => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const qrUrlForSlug = (slug: string) => `${API_URL}/api/qr/${encodeURIComponent(slug)}`;
 
   if (authLoading) {
     return (
@@ -554,6 +635,28 @@ export default function DashboardPage() {
           </Link>
         </div>
 
+        <section className="mb-6 rounded-2xl border border-[#ff7a18]/25 bg-[#0a0308]/65 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-[#ffb347]/70">Storage</p>
+              <p className="text-sm text-zinc-300">
+                {formatBytes(usedStorage)} / {currentTier === "free" ? formatBytes(freeStorageCap) : "Unlimited"}
+              </p>
+            </div>
+            {currentTier === "free" && (
+              <Link href="/plans" className="text-xs px-3 py-2 rounded-lg border border-[#ff7a18]/35 text-[#ffb347] hover:text-[#ffd65b]">
+                Upgrade
+              </Link>
+            )}
+          </div>
+          <div className="mt-3 h-2 rounded-full bg-black/35 border border-[#ff7a18]/20 overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-[#ff7a18] to-[#ffb347]" style={{ width: `${usagePercent}%` }} />
+          </div>
+          {currentTier === "free" && usagePercent >= 80 && (
+            <p className="text-[11px] text-[#ffd65b] mt-2">You are above 80% of free storage capacity.</p>
+          )}
+        </section>
+
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-6 h-6 animate-spin text-[#ffb347]" />
@@ -604,6 +707,15 @@ export default function DashboardPage() {
                   >
                     {copied === upload.slug ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
+                  <a
+                    href={qrUrlForSlug(upload.slug)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-lg bg-[#1a120e] border border-[#ff7a18]/20 hover:border-[#ffb347]/40 text-[#ffb347] hover:text-white transition-all"
+                    title="Open QR"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                  </a>
                   <a
                     href={`${API_URL}/${upload.slug}`}
                     target="_blank"
@@ -713,7 +825,9 @@ export default function DashboardPage() {
                   sensors={sensors}
                   onDragEnd={handleBundleDragEnd}
                   onAppend={handleAppendToBundle}
+                  onRename={handleRenameBundle}
                   appendLoading={bundleAppending === bundle.slug}
+                  renameLoading={bundleRenaming === bundle.slug}
                   remainingSlots={Math.max(bundleFileLimit - bundle.files.length, 0)}
                 />
               ))}

@@ -14,6 +14,14 @@ export interface Profile {
   lifetime_plan: string | null;
 }
 
+function normalizeTier(input?: string | null): "guest" | "free" | "pro" | "ultimate" {
+  const tier = (input || "free").trim().toLowerCase();
+  if (tier === "ultimate") return "ultimate";
+  if (tier === "pro" || tier === "core") return "pro";
+  if (tier === "guest") return "guest";
+  return "free";
+}
+
 interface AuthContextType {
   session: Session | null;
   user: User | null;
@@ -54,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .maybeSingle();
 
     if (!error && data) {
-      setProfile(data as Profile);
+      setProfile({ ...(data as Profile), tier: normalizeTier((data as Profile).tier) });
     } else if (error) {
       console.error("Failed to load profile", error.message);
     }

@@ -22,6 +22,7 @@ import {
   Sparkles,
   Calendar,
   Globe,
+  Archive,
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -391,6 +392,15 @@ export default function BundleViewPage() {
       </header>
 
       <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-8 z-10 space-y-6">
+        <div className="flex justify-end">
+          <a
+            href={`${API_URL}/api/bundle/${encodeURIComponent(slug)}/zip`}
+            className="inline-flex items-center gap-2 rounded-xl border border-[#ff7a18]/35 bg-[#1a120e]/70 px-3.5 py-2 text-xs font-semibold text-[#ffb347] hover:text-[#ffd65b] hover:border-[#ffb347]/60 transition-all"
+          >
+            <Archive className="w-3.5 h-3.5" />
+            Download All (.zip)
+          </a>
+        </div>
         <section className="grid sm:grid-cols-3 gap-3">
           <div className="rounded-2xl border border-[#ff7a18]/20 bg-[#0a0308]/70 p-4">
             <p className="text-[10px] uppercase tracking-[0.22em] text-[#ffb347]/70">Total Items</p>

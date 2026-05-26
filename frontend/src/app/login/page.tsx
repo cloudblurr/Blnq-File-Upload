@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 import { LogIn, UserPlus, ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 
 export default function LoginPage() {
   const { signIn, signUp, user, loading: authLoading } = useAuth();
@@ -15,6 +16,24 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState("");
+  const [showSplash, setShowSplash] = useState(false);
+  const [splashResolved, setSplashResolved] = useState(false);
+
+  useEffect(() => {
+    const shouldShowSplash = Math.random() < 0.25;
+    if (!shouldShowSplash) {
+      setSplashResolved(true);
+      return;
+    }
+
+    setShowSplash(true);
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+      setSplashResolved(true);
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -26,6 +45,95 @@ export default function LoginPage() {
     return (
       <div className="flex items-center justify-center min-h-screen bg-zinc-950 text-zinc-400 text-sm">
         Redirecting...
+      </div>
+    );
+  }
+
+  if (!splashResolved || showSplash) {
+    return (
+      <div className="relative flex items-center justify-center min-h-screen overflow-hidden bg-[#050205]">
+        <div className="absolute top-[-20%] left-[-12%] w-[680px] h-[680px] rounded-full bg-[#ff7a18]/20 blur-[130px]" />
+        <div className="absolute bottom-[-18%] right-[-10%] w-[620px] h-[620px] rounded-full bg-[#ffb347]/18 blur-[140px]" />
+        <div className="relative z-10 flex flex-col items-center gap-5">
+          <div className="relative splash-logo-wrap">
+            <Image
+              src="/brand-symbol.jpg"
+              alt="Blnq"
+              width={120}
+              height={120}
+              className="rounded-[1.75rem] border border-[#ffb347]/40 shadow-[0_0_35px_rgba(255,122,24,0.35)] splash-logo-base"
+              priority
+            />
+            <Image
+              src="/brand-symbol.jpg"
+              alt=""
+              aria-hidden
+              width={120}
+              height={120}
+              className="rounded-[1.75rem] absolute inset-0 splash-logo-glitch-a pointer-events-none"
+            />
+            <Image
+              src="/brand-symbol.jpg"
+              alt=""
+              aria-hidden
+              width={120}
+              height={120}
+              className="rounded-[1.75rem] absolute inset-0 splash-logo-glitch-b pointer-events-none"
+            />
+          </div>
+          <p className="text-[11px] uppercase tracking-[0.32em] text-[#ffb347]/85 animate-pulse">Initializing Auth Portal</p>
+        </div>
+
+        <style jsx>{`
+          .splash-logo-wrap {
+            animation: twitch 1.2s steps(2, end) infinite, pulse 1.8s ease-in-out infinite;
+          }
+          .splash-logo-base {
+            animation: logo-jitter 0.14s linear infinite;
+          }
+          .splash-logo-glitch-a {
+            mix-blend-mode: screen;
+            opacity: 0.45;
+            filter: hue-rotate(18deg) saturate(1.25);
+            clip-path: inset(8% 0 58% 0);
+            animation: glitch-a 0.22s steps(2, end) infinite;
+          }
+          .splash-logo-glitch-b {
+            mix-blend-mode: lighten;
+            opacity: 0.38;
+            filter: hue-rotate(-15deg) saturate(1.35);
+            clip-path: inset(52% 0 8% 0);
+            animation: glitch-b 0.19s steps(2, end) infinite;
+          }
+
+          @keyframes pulse {
+            0%, 100% { transform: scale(0.98); filter: drop-shadow(0 0 0 rgba(255, 122, 24, 0)); }
+            50% { transform: scale(1.06); filter: drop-shadow(0 0 16px rgba(255, 179, 71, 0.5)); }
+          }
+          @keyframes twitch {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            20% { transform: translate(-1px, 1px) rotate(-0.3deg); }
+            40% { transform: translate(1px, -1px) rotate(0.4deg); }
+            60% { transform: translate(-1px, -1px) rotate(-0.25deg); }
+            80% { transform: translate(1px, 1px) rotate(0.25deg); }
+          }
+          @keyframes logo-jitter {
+            0%, 100% { transform: translate(0, 0); }
+            25% { transform: translate(0.8px, -0.6px); }
+            50% { transform: translate(-0.7px, 0.8px); }
+            75% { transform: translate(0.6px, -0.8px); }
+          }
+          @keyframes glitch-a {
+            0%, 100% { transform: translate(0, 0); opacity: 0.3; }
+            33% { transform: translate(3px, -1px); opacity: 0.48; }
+            66% { transform: translate(-2px, 1px); opacity: 0.36; }
+          }
+          @keyframes glitch-b {
+            0%, 100% { transform: translate(0, 0); opacity: 0.3; }
+            33% { transform: translate(-3px, 1px); opacity: 0.44; }
+            66% { transform: translate(2px, -1px); opacity: 0.34; }
+          }
+        `}</style>
       </div>
     );
   }
