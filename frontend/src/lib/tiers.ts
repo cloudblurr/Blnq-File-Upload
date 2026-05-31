@@ -12,7 +12,7 @@ export const TIER_LIMITS: Record<TierName, TierLimits> = {
   guest: { maxFileSize: 400 * 1024 * 1024, maxStorage: 0, uploadsPerHour: 3, maxBundles: 0, maxBundleFiles: 0 },
   free: { maxFileSize: 400 * 1024 * 1024, maxStorage: 5 * 1024 * 1024 * 1024, uploadsPerHour: 50, maxBundles: 3, maxBundleFiles: 10 },
   pro: { maxFileSize: 2 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 1000, maxBundles: Number.MAX_SAFE_INTEGER, maxBundleFiles: 30 },
-  ultimate: { maxFileSize: 5 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 2000, maxBundles: Number.MAX_SAFE_INTEGER, maxBundleFiles: 100 },
+  ultimate: { maxFileSize: 5 * 1024 * 1024 * 1024, maxStorage: Infinity, uploadsPerHour: 2000, maxBundles: Number.MAX_SAFE_INTEGER, maxBundleFiles: Number.MAX_SAFE_INTEGER },
 };
 
 export const TIER_FEATURES: Record<string, TierName[]> = {
@@ -77,7 +77,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     label: "Blnq Ultimate",
     price: "$9.99",
     cadence: "Monthly",
-    description: "5GB uploads, unlimited bundles, 100 files per bundle, APIs, vanity links, and support.",
+    description: "5GB uploads, unlimited bundles, unlimited bundle uploads, APIs, vanity links, and support.",
     amountUsdCents: 999,
   },
 ];

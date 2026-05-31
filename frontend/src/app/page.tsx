@@ -33,6 +33,17 @@ import { TIER_LIMITS, TierName } from "@/lib/tiers";
 
 const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || "https://www.blnq.click";
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
+const BUNDLE_UPLOAD_BATCH_SIZE = 100;
+
+const isUnlimitedLimit = (value: number) => !Number.isFinite(value) || value >= Number.MAX_SAFE_INTEGER;
+
+const chunkFiles = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
 
 function OpenSourceBundleIcon({ className = "w-4 h-4" }: { className?: string }) {
   return (
@@ -97,6 +108,8 @@ export default function Home() {
     return user ? "free" : "guest";
   }, [profile?.tier, user]);
   const bundleFileLimit = TIER_LIMITS[currentTier].maxBundleFiles || 0;
+  const hasUnlimitedBundleUploads = isUnlimitedLimit(bundleFileLimit);
+  const bundleLimitLabel = hasUnlimitedBundleUploads ? "unlimited uploads" : `${bundleFileLimit} uploads`;
 
   // Load customized API endpoint from localStorage if exists
   useEffect(() => {
@@ -306,6 +319,11 @@ export default function Home() {
     }
   };
 
+  const limitFilesForPlan = (selectedFiles: File[]) => {
+    if (hasUnlimitedBundleUploads) return selectedFiles;
+    return selectedFiles.slice(0, bundleFileLimit || 1);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     if (uploadMode !== "local") return;
     e.preventDefault();
@@ -314,7 +332,7 @@ export default function Home() {
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       if (bundleMode) {
-        const droppedFiles = Array.from(e.dataTransfer.files).slice(0, bundleFileLimit || 1);
+        const droppedFiles = limitFilesForPlan(Array.from(e.dataTransfer.files));
         handleFilesSelected(droppedFiles);
       } else {
         handleFileSelected(e.dataTransfer.files[0]);
@@ -327,7 +345,7 @@ export default function Home() {
     e.preventDefault();
     if (e.target.files && e.target.files.length > 0) {
       if (bundleMode) {
-        const selectedFiles = Array.from(e.target.files).slice(0, bundleFileLimit || 1);
+        const selectedFiles = limitFilesForPlan(Array.from(e.target.files));
         handleFilesSelected(selectedFiles);
       } else {
         handleFileSelected(e.target.files[0]);
@@ -366,7 +384,7 @@ export default function Home() {
           seen.add(key);
         }
       }
-      return merged.slice(0, bundleFileLimit || 1);
+      return limitFilesForPlan(merged);
     });
     setFile(null);
     setUploadProgress(0);
@@ -395,52 +413,105 @@ export default function Home() {
     setResultMime("");
 
     try {
-      const signPayload = {
-        mode: bundleMode ? "bundle" : "single",
-        user_id: user?.id,
-        files: fileBatch.map((f) => ({ name: f.name, type: f.type, size: f.size })),
-      };
+      if (bundleMode) {
+        const fileChunks = chunkFiles(fileBatch, BUNDLE_UPLOAD_BATCH_SIZE);
+        const totalBundleBytes = fileBatch.reduce((sum, f) => sum + f.size, 0);
+        let uploadedBundleBytes = 0;
+        let bundleSlug: string | null = null;
+        let bundleQrUrl = "";
 
-      const signRes = await fetch(`${apiUrl}/api/sign-upload`, {
-        method: "POST",
-        headers: buildRequestHeaders(),
-        body: JSON.stringify({
-          ...signPayload,
-          turnstile_token: turnstileToken || undefined,
-        }),
-      });
+        for (let chunkIndex = 0; chunkIndex < fileChunks.length; chunkIndex++) {
+          const fileChunk = fileChunks[chunkIndex];
+          if (!fileChunk?.length) continue;
 
-      if (!signRes.ok) {
-        const err = await signRes.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to request upload slots");
-      }
-
-      const signData = await signRes.json();
-      const uploads: { slug: string; uploadUrl: string }[] = signData.uploads;
-      const bundleSlug: string | null = signData.bundle_slug;
-
-      if (bundleMode && !bundleSlug) {
-        throw new Error("Bundle slug missing from sign-upload response");
-      }
-
-      await uploadToPresignedUrls(fileBatch, uploads);
-
-      const completePayload = bundleMode
-        ? {
-            mode: "bundle",
-            bundle: {
-              slug: bundleSlug,
-              title: bundleTitle || "Untitled Bundle",
+          const signRes: Response = await fetch(`${apiUrl}/api/sign-upload`, {
+            method: "POST",
+            headers: buildRequestHeaders(),
+            body: JSON.stringify({
+              mode: "bundle",
               user_id: user?.id,
-              pin: pinEnabled ? pinValue : undefined,
-            },
-            files: uploads.map((upload, index) => ({
-              slug: upload.slug,
-              file_type: fileBatch[index].type,
-              file_size: fileBatch[index].size,
-            })),
+              bundle_slug: bundleSlug || undefined,
+              files: fileChunk.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+              turnstile_token: turnstileToken || undefined,
+            }),
+          });
+
+          if (!signRes.ok) {
+            const err = await signRes.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to request upload slots");
           }
-        : {
+
+          const signData = await signRes.json() as { uploads: { slug: string; uploadUrl: string }[]; bundle_slug?: string | null };
+          const uploads = signData.uploads;
+          const nextBundleSlug: string | null = signData.bundle_slug ?? null;
+          if (!nextBundleSlug) {
+            throw new Error("Bundle slug missing from sign-upload response");
+          }
+          if (!bundleSlug) {
+            bundleSlug = nextBundleSlug;
+          }
+
+          await uploadToPresignedUrls(fileChunk, uploads, uploadedBundleBytes, totalBundleBytes);
+          uploadedBundleBytes += fileChunk.reduce((sum, f) => sum + f.size, 0);
+
+          const completeRes = await fetch(`${apiUrl}/api/complete-upload`, {
+            method: "POST",
+            headers: buildRequestHeaders(),
+            body: JSON.stringify({
+              mode: "bundle",
+              bundle: {
+                slug: bundleSlug,
+                title: chunkIndex === 0 ? bundleTitle || "Untitled Bundle" : undefined,
+                user_id: user?.id,
+                pin: chunkIndex === 0 && pinEnabled ? pinValue : undefined,
+              },
+              files: uploads.map((upload, index) => ({
+                slug: upload.slug,
+                file_type: fileChunk[index].type,
+                file_size: fileChunk[index].size,
+              })),
+            }),
+          });
+
+          const completeData = await completeRes.json().catch(() => ({}));
+          if (!completeRes.ok || !completeData.success) {
+            throw new Error(completeData.error || "Failed to finalize upload");
+          }
+          bundleQrUrl = completeData.qr_url || bundleQrUrl;
+        }
+
+        const base = typeof window !== "undefined" ? window.location.origin : "";
+        const shareUrl = bundleSlug ? `${base}/b/${bundleSlug}` : "";
+        setResultUrl(shareUrl);
+        setResultFilename(bundleSlug || "");
+        setResultType("bundle");
+        setResultSize(totalBundleBytes);
+        setResultQrUrl(bundleQrUrl);
+      } else {
+        const signRes: Response = await fetch(`${apiUrl}/api/sign-upload`, {
+          method: "POST",
+          headers: buildRequestHeaders(),
+          body: JSON.stringify({
+            mode: "single",
+            user_id: user?.id,
+            files: fileBatch.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+            turnstile_token: turnstileToken || undefined,
+          }),
+        });
+
+        if (!signRes.ok) {
+          const err = await signRes.json().catch(() => ({}));
+          throw new Error(err.error || "Failed to request upload slots");
+        }
+
+        const signData = await signRes.json() as { uploads: { slug: string; uploadUrl: string }[] };
+        const uploads = signData.uploads;
+        await uploadToPresignedUrls(fileBatch, uploads);
+
+        const completeRes = await fetch(`${apiUrl}/api/complete-upload`, {
+          method: "POST",
+          headers: buildRequestHeaders(),
+          body: JSON.stringify({
             mode: "single",
             upload: {
               slug: uploads[0].slug,
@@ -450,28 +521,14 @@ export default function Home() {
               pin: pinEnabled ? pinValue : undefined,
               expires_in: expiresIn || undefined,
             },
-          };
+          }),
+        });
 
-      const completeRes = await fetch(`${apiUrl}/api/complete-upload`, {
-        method: "POST",
-        headers: buildRequestHeaders(),
-        body: JSON.stringify(completePayload),
-      });
+        const completeData = await completeRes.json().catch(() => ({}));
+        if (!completeRes.ok || !completeData.success) {
+          throw new Error(completeData.error || "Failed to finalize upload");
+        }
 
-      const completeData = await completeRes.json().catch(() => ({}));
-      if (!completeRes.ok || !completeData.success) {
-        throw new Error(completeData.error || "Failed to finalize upload");
-      }
-
-      if (bundleMode) {
-        const slug = completeData.bundle_slug;
-        const base = typeof window !== "undefined" ? window.location.origin : "";
-        const shareUrl = slug ? `${base}/b/${slug}` : "";
-        setResultUrl(shareUrl);
-        setResultFilename(slug);
-        setResultType("bundle");
-        setResultQrUrl(completeData.qr_url || "");
-      } else {
         setResultUrl(completeData.url);
         setResultFilename(completeData.filename || completeData.key);
         setResultType("file");
@@ -488,9 +545,14 @@ export default function Home() {
     }
   };
 
-  const uploadToPresignedUrls = async (fileBatch: File[], uploads: { slug: string; uploadUrl: string }[]) => {
-    const totalBytes = fileBatch.reduce((sum, f) => sum + f.size, 0);
-    let uploadedBytes = 0;
+  const uploadToPresignedUrls = async (
+    fileBatch: File[],
+    uploads: { slug: string; uploadUrl: string }[],
+    progressOffset = 0,
+    totalBytesOverride?: number,
+  ) => {
+    const totalBytes = totalBytesOverride ?? fileBatch.reduce((sum, f) => sum + f.size, 0);
+    let uploadedBytes = progressOffset;
 
     for (let i = 0; i < uploads.length; i++) {
       const file = fileBatch[i];
@@ -844,7 +906,7 @@ export default function Home() {
                 }`}
               >
                 <OpenSourceBundleIcon className="w-3.5 h-3.5" />
-                {bundleMode ? `Bundle Mode (up to ${bundleFileLimit})` : "Create Bundle"}
+                {bundleMode ? `Bundle Mode (${bundleLimitLabel})` : "Create Bundle"}
               </button>
             </div>
           )}
@@ -867,14 +929,14 @@ export default function Home() {
                 <UploadCloud className="w-7 h-7" />
               </div>
               <p className="text-sm font-semibold mb-1 text-[#f7f4ef]">
-                {bundleMode ? `Drop up to ${bundleFileLimit} files` : "Drag and drop your file here"}
+                {bundleMode ? (hasUnlimitedBundleUploads ? "Drop files for one bundle" : `Drop up to ${bundleFileLimit} files`) : "Drag and drop your file here"}
               </p>
               <p className="text-xs text-[#ffb347]/70 mb-4">
                 or click to browse from device
               </p>
               <p className="text-[10px] text-zinc-500 mb-3">Tip: paste a screenshot with Ctrl/Cmd+V.</p>
               <span className="text-[10px] text-[#ffb347]/80 bg-[#1a120e]/70 py-1 px-2.5 rounded-full border border-[#ff7a18]/30">
-                {bundleMode ? `Bundle-ready media (${bundleFileLimit} max)` : "Any file type supported"}
+                {bundleMode ? (hasUnlimitedBundleUploads ? "Unlimited bundle uploads" : `Bundle-ready media (${bundleFileLimit} max)`) : "Any file type supported"}
               </span>
             </div>
           )}

@@ -10,7 +10,7 @@ import { PLAN_DEFINITIONS, TIER_FEATURES, TIER_LIMITS, PlanDefinition, TierName 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://www.blnq.click";
 
 const FEATURE_MATRIX: { id: keyof typeof TIER_FEATURES; label: string; helper?: string }[] = [
-  { id: "bundles", label: "Bundles & collections", helper: "Spark: 3 bundles / 10 files each" },
+  { id: "bundles", label: "Bundles & collections", helper: "Spark: 3 bundles / 10 uploads each" },
   { id: "pinProtection", label: "PIN-protected drops" },
   { id: "customExpiry", label: "Custom expiry windows" },
   { id: "scheduledDeletion", label: "Scheduled deletion" },
@@ -29,9 +29,15 @@ const formatBytes = (bytes: number): string => {
 };
 
 const bundleLabel = (maxBundles: number) => {
-  if (!Number.isFinite(maxBundles)) return "Unlimited bundles";
+  if (!Number.isFinite(maxBundles) || maxBundles >= Number.MAX_SAFE_INTEGER) return "Unlimited bundles";
   if (maxBundles === 0) return "No bundles";
   return `${maxBundles} bundles`;
+};
+
+const bundleFileLabel = (maxBundleFiles: number) => {
+  if (maxBundleFiles <= 0) return "No bundle uploads";
+  if (!Number.isFinite(maxBundleFiles) || maxBundleFiles >= Number.MAX_SAFE_INTEGER) return "Unlimited uploads per bundle";
+  return `${maxBundleFiles} uploads per bundle`;
 };
 
 export default function PlansPage() {
@@ -171,6 +177,7 @@ export default function PlansPage() {
                   <li>• {formatBytes(limits.maxFileSize)} per upload</li>
                   <li>• {limits.uploadsPerHour >= 1000 ? "Unlimited uploads" : `${limits.uploadsPerHour} uploads/hour cap`}</li>
                   <li>• {bundleLabel(limits.maxBundles)}</li>
+                  <li>• {bundleFileLabel(limits.maxBundleFiles)}</li>
                 </ul>
                 <div className="mt-auto pt-2">
                   {requiresCheckout ? (

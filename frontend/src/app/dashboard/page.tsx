@@ -9,7 +9,8 @@ import NextImage from "next/image";
 import { PLAN_DEFINITIONS, TierName, TIER_LIMITS } from "@/lib/tiers";
 import {
   Trash2, Lock, Unlock, Clock, Copy, Check, ExternalLink,
-  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical, Plus, QrCode
+  ArrowLeft, LogOut, File, Image as ImageIcon, Video, Music, FileText, Loader2, MoveVertical, Plus, QrCode,
+  CreditCard, FolderOpen, HardDrive, UploadCloud
 } from "lucide-react";
 import {
   DndContext,
@@ -28,6 +29,19 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://www.blnq.click";
+const BUNDLE_UPLOAD_BATCH_SIZE = 100;
+
+type DashboardSection = "overview" | "uploads" | "bundles" | "billing";
+
+const isUnlimitedLimit = (value: number) => !Number.isFinite(value) || value >= Number.MAX_SAFE_INTEGER;
+
+const chunkFiles = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
 
 interface Upload {
   id: string;
@@ -49,17 +63,14 @@ interface BundleCardProps {
   onRename: (bundleSlug: string, title: string) => Promise<void>;
   appendLoading: boolean;
   renameLoading: boolean;
-  remainingSlots: number;
+  remainingSlots: number | null;
 }
 
 function BundleCard({ bundle, sensors, onDragEnd, onAppend, onRename, appendLoading, renameLoading, remainingSlots }: BundleCardProps) {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [editingTitle, setEditingTitle] = React.useState(false);
   const [titleValue, setTitleValue] = React.useState(bundle.title || "Untitled Bundle");
-
-  React.useEffect(() => {
-    setTitleValue(bundle.title || "Untitled Bundle");
-  }, [bundle.title]);
+  const hasRemainingSlots = remainingSlots === null || remainingSlots > 0;
 
   const handleChooseFiles = () => {
     fileInputRef.current?.click();
@@ -80,6 +91,11 @@ function BundleCard({ bundle, sensors, onDragEnd, onAppend, onRename, appendLoad
     }
     await onRename(bundle.slug, next);
     setEditingTitle(false);
+  };
+
+  const handleStartTitleEdit = () => {
+    setTitleValue(bundle.title || "Untitled Bundle");
+    setEditingTitle(true);
   };
 
   return (
@@ -112,7 +128,7 @@ function BundleCard({ bundle, sensors, onDragEnd, onAppend, onRename, appendLoad
             <div className="flex items-center gap-2">
               <p className="text-sm font-semibold text-zinc-100">{bundle.title || "Untitled Bundle"}</p>
               <button
-                onClick={() => setEditingTitle(true)}
+                onClick={handleStartTitleEdit}
                 className="text-[11px] text-zinc-400 hover:text-zinc-200"
               >
                 Edit
@@ -124,7 +140,7 @@ function BundleCard({ bundle, sensors, onDragEnd, onAppend, onRename, appendLoad
         <div className="flex items-center gap-2">
           <button
             onClick={handleChooseFiles}
-            disabled={appendLoading || remainingSlots <= 0}
+            disabled={appendLoading || !hasRemainingSlots}
             className="px-2.5 py-1.5 rounded-lg border border-[#ff7a18]/30 text-[#ffb347] text-[11px] hover:text-white hover:border-[#ffb347]/60 disabled:opacity-45 disabled:cursor-not-allowed inline-flex items-center gap-1"
           >
             <Plus className="w-3 h-3" />
@@ -139,11 +155,11 @@ function BundleCard({ bundle, sensors, onDragEnd, onAppend, onRename, appendLoad
         ref={fileInputRef}
         type="file"
         className="hidden"
-        multiple={remainingSlots > 1}
+        multiple={remainingSlots === null || remainingSlots > 1}
         onChange={handleFilesSelected}
       />
       <p className="text-[11px] text-zinc-500 mb-3">
-        {remainingSlots > 0 ? `${remainingSlots} slot${remainingSlots > 1 ? "s" : ""} remaining` : "Bundle is at plan limit"}
+        {remainingSlots === null ? "Unlimited uploads remaining" : remainingSlots > 0 ? `${remainingSlots} slot${remainingSlots > 1 ? "s" : ""} remaining` : "Bundle is at plan limit"}
       </p>
 
       {bundle.files.length === 0 ? (
@@ -266,9 +282,12 @@ export default function DashboardPage() {
   const [bundleRenaming, setBundleRenaming] = useState<string | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   const [billing, setBilling] = useState<BillingSummary | null>(null);
+  const [activeSection, setActiveSection] = useState<DashboardSection>("uploads");
   const currentTier: TierName =
     profile?.tier === "free" || profile?.tier === "pro" || profile?.tier === "ultimate" ? profile.tier : "free";
   const bundleFileLimit = TIER_LIMITS[currentTier].maxBundleFiles;
+  const hasUnlimitedBundleUploads = isUnlimitedLimit(bundleFileLimit);
+  const bundlePlanLimitLabel = hasUnlimitedBundleUploads ? "Unlimited uploads per bundle" : `${bundleFileLimit} files per bundle`;
   const freeStorageCap = TIER_LIMITS.free.maxStorage;
   const usedStorage = Math.max(0, profile?.storage_used || 0);
   const usagePercent = Math.min(100, freeStorageCap > 0 ? (usedStorage / freeStorageCap) * 100 : 0);
@@ -470,53 +489,56 @@ export default function DashboardPage() {
       return;
     }
 
-    const remainingSlots = Math.max(bundleFileLimit - bundle.files.length, 0);
-    if (remainingSlots <= 0) {
+    const remainingSlots = hasUnlimitedBundleUploads ? null : Math.max(bundleFileLimit - bundle.files.length, 0);
+    if (remainingSlots !== null && remainingSlots <= 0) {
       setBundleError(`This bundle reached your ${bundleFileLimit}-file plan limit.`);
       return;
     }
 
-    const filesToUpload = validFiles.slice(0, remainingSlots);
+    const filesToUpload = remainingSlots === null ? validFiles : validFiles.slice(0, remainingSlots);
     setBundleAppending(bundle.slug);
     setBundleError(null);
     try {
-      const signRes = await fetch(`${API_URL}/api/sign-upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "bundle",
-          user_id: user.id,
-          bundle_slug: bundle.slug,
-          files: filesToUpload.map((f) => ({ name: f.name, type: f.type, size: f.size })),
-        }),
-      });
-      const signData = await signRes.json().catch(() => null);
-      if (!signRes.ok || !signData?.uploads) {
-        throw new Error(signData?.error || "Failed to prepare bundle upload");
-      }
-      const uploadsSigned = signData.uploads as { slug: string; uploadUrl: string }[];
-      await uploadFilesToPresignedUrls(filesToUpload, uploadsSigned);
-
-      const completeRes = await fetch(`${API_URL}/api/complete-upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "bundle",
-          bundle: {
-            slug: bundle.slug,
+      const fileChunks = chunkFiles(filesToUpload, BUNDLE_UPLOAD_BATCH_SIZE);
+      for (const fileChunk of fileChunks) {
+        const signRes = await fetch(`${API_URL}/api/sign-upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "bundle",
             user_id: user.id,
-            title: bundle.title || undefined,
-          },
-          files: uploadsSigned.map((u, index) => ({
-            slug: u.slug,
-            file_type: filesToUpload[index].type,
-            file_size: filesToUpload[index].size,
-          })),
-        }),
-      });
-      const completeData = await completeRes.json().catch(() => null);
-      if (!completeRes.ok || !completeData?.success) {
-        throw new Error(completeData?.error || "Failed to finalize bundle updates");
+            bundle_slug: bundle.slug,
+            files: fileChunk.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+          }),
+        });
+        const signData = await signRes.json().catch(() => null);
+        if (!signRes.ok || !signData?.uploads) {
+          throw new Error(signData?.error || "Failed to prepare bundle upload");
+        }
+        const uploadsSigned = signData.uploads as { slug: string; uploadUrl: string }[];
+        await uploadFilesToPresignedUrls(fileChunk, uploadsSigned);
+
+        const completeRes = await fetch(`${API_URL}/api/complete-upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "bundle",
+            bundle: {
+              slug: bundle.slug,
+              user_id: user.id,
+              title: bundle.title || undefined,
+            },
+            files: uploadsSigned.map((u, index) => ({
+              slug: u.slug,
+              file_type: fileChunk[index].type,
+              file_size: fileChunk[index].size,
+            })),
+          }),
+        });
+        const completeData = await completeRes.json().catch(() => null);
+        if (!completeRes.ok || !completeData?.success) {
+          throw new Error(completeData?.error || "Failed to finalize bundle updates");
+        }
       }
       await fetchData();
     } catch (err: unknown) {
@@ -576,6 +598,12 @@ export default function DashboardPage() {
 
   const formatDate = (d: string) => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const qrUrlForSlug = (slug: string) => `${API_URL}/api/qr/${encodeURIComponent(slug)}`;
+  const dashboardSections = [
+    { id: "overview" as const, label: "Overview", meta: currentTier.toUpperCase(), icon: HardDrive },
+    { id: "uploads" as const, label: "Uploads", meta: `${uploads.length}`, icon: UploadCloud },
+    { id: "bundles" as const, label: "Bundles", meta: `${bundles.length}`, icon: FolderOpen },
+    { id: "billing" as const, label: "Billing", meta: billing?.profile?.subscription_status || "inactive", icon: CreditCard },
+  ];
 
   if (authLoading) {
     return (
@@ -621,11 +649,11 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-4xl mx-auto px-6 py-8 z-10">
+      <main className="flex-1 w-full max-w-5xl mx-auto px-6 py-8 z-10">
         <div className="flex items-center justify-between mb-6">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-[#ffb347]/70">Dashboard</p>
-            <h1 className="text-2xl font-bold text-[#f7f4ef]">My Uploads</h1>
+            <h1 className="text-2xl font-bold text-[#f7f4ef]">Profile Dashboard</h1>
           </div>
           <Link
             href="/"
@@ -635,6 +663,35 @@ export default function DashboardPage() {
           </Link>
         </div>
 
+        <nav className="mb-6 grid grid-cols-2 gap-2 lg:grid-cols-4">
+          {dashboardSections.map((section) => {
+            const Icon = section.icon;
+            const isActive = activeSection === section.id;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => setActiveSection(section.id)}
+                aria-pressed={isActive}
+                className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-3 text-left transition-all ${
+                  isActive
+                    ? "border-[#ffb347]/55 bg-[#ff7a18]/15 text-[#f7f4ef]"
+                    : "border-[#ff7a18]/20 bg-[#0a0308]/65 text-[#ffb347]/70 hover:border-[#ffb347]/45 hover:text-[#f7f4ef]"
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="truncate text-sm font-semibold">{section.label}</span>
+                </span>
+                <span className="truncate rounded-md bg-black/25 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-[#ffb347]/80">
+                  {section.meta}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {activeSection === "overview" && (
         <section className="mb-6 rounded-2xl border border-[#ff7a18]/25 bg-[#0a0308]/65 p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -656,8 +713,27 @@ export default function DashboardPage() {
             <p className="text-[11px] text-[#ffd65b] mt-2">You are above 80% of free storage capacity.</p>
           )}
         </section>
+        )}
 
-        {loading ? (
+        {activeSection === "overview" && (
+          <section className="mb-6 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-[#ff7a18]/20 bg-[#0a0308]/65 p-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-[#ffb347]/60">Uploads</p>
+              <p className="mt-2 text-2xl font-semibold text-[#f7f4ef]">{uploads.length}</p>
+            </div>
+            <div className="rounded-xl border border-[#ff7a18]/20 bg-[#0a0308]/65 p-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-[#ffb347]/60">Bundles</p>
+              <p className="mt-2 text-2xl font-semibold text-[#f7f4ef]">{bundles.length}</p>
+            </div>
+            <div className="rounded-xl border border-[#ff7a18]/20 bg-[#0a0308]/65 p-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-[#ffb347]/60">Bundle Limit</p>
+              <p className="mt-2 text-sm font-semibold text-[#f7f4ef]">{bundlePlanLimitLabel}</p>
+            </div>
+          </section>
+        )}
+
+        {activeSection === "uploads" && (
+        loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-6 h-6 animate-spin text-[#ffb347]" />
           </div>
@@ -753,10 +829,10 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-        )}
+        ))}
 
-        {/* Bundles Section */}
-        <section className="mt-10 rounded-2xl border border-[#ff7a18]/25 bg-[#0a0308]/65 p-5">
+        {activeSection === "billing" && (
+        <section className="rounded-2xl border border-[#ff7a18]/25 bg-[#0a0308]/65 p-5">
           <div className="flex items-center justify-between gap-4 mb-3">
             <div>
               <h2 className="text-xl font-semibold text-[#f7f4ef]">Billing</h2>
@@ -769,7 +845,7 @@ export default function DashboardPage() {
           <p className="text-sm text-zinc-300">
             Current:{" "}
             <span className="text-[#ffd65b] font-semibold">
-              {PLAN_DEFINITIONS.find((p) => p.id === billing?.profile?.tier)?.label || "Blnq Spark"}
+              {PLAN_DEFINITIONS.find((p) => p.id === (billing?.profile?.tier || currentTier))?.label || "Blnq Spark"}
             </span>
             {" • "}
             <span className="uppercase text-[11px] tracking-[0.2em] text-zinc-400">{billing?.profile?.subscription_status || "inactive"}</span>
@@ -794,14 +870,15 @@ export default function DashboardPage() {
             )}
           </div>
         </section>
+        )}
 
-        {/* Bundles Section */}
-        <section className="mt-10">
+        {activeSection === "bundles" && (
+        <section>
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-xl font-semibold text-[#f7f4ef]">Bundles</h2>
               <p className="text-xs text-[#ffb347]/70">Drag files to reorder gallery presentation.</p>
-              <p className="text-[11px] text-zinc-500 mt-1">Plan limit: {bundleFileLimit} files per bundle.</p>
+              <p className="text-[11px] text-zinc-500 mt-1">Plan limit: {bundlePlanLimitLabel}.</p>
             </div>
             {bundleSaving && (
               <span className="text-[11px] text-[#ffd65b] flex items-center gap-1">
@@ -814,7 +891,11 @@ export default function DashboardPage() {
             <p className="text-xs text-red-400 mb-3">{bundleError}</p>
           )}
 
-          {bundles.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-6 h-6 animate-spin text-[#ffb347]" />
+            </div>
+          ) : bundles.length === 0 ? (
             <p className="text-sm text-zinc-500">No bundles yet. Create one from the uploader when selecting multiple files.</p>
           ) : (
             <div className="space-y-3">
@@ -828,12 +909,13 @@ export default function DashboardPage() {
                   onRename={handleRenameBundle}
                   appendLoading={bundleAppending === bundle.slug}
                   renameLoading={bundleRenaming === bundle.slug}
-                  remainingSlots={Math.max(bundleFileLimit - bundle.files.length, 0)}
+                  remainingSlots={hasUnlimitedBundleUploads ? null : Math.max(bundleFileLimit - bundle.files.length, 0)}
                 />
               ))}
             </div>
           )}
         </section>
+        )}
       </main>
 
       {/* PIN Modal */}

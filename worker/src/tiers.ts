@@ -48,7 +48,7 @@ export const TIER_LIMITS: Record<TierName, TierLimits> = {
     maxStorage: Infinity,
     uploadsPerHour: 2000,
     maxBundles: Number.MAX_SAFE_INTEGER,
-    maxBundleFiles: 100,
+    maxBundleFiles: Number.MAX_SAFE_INTEGER,
   },
 };
 
@@ -105,7 +105,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     label: "Blnq Ultimate",
     price: "$9.99/mo",
     billingCycle: "monthly",
-    description: "5GB uploads, unlimited bundles, 100 files per bundle, priority help, APIs, and automations.",
+    description: "5GB uploads, unlimited bundles, unlimited bundle uploads, priority help, APIs, and automations.",
     amountUsdCents: 999,
   },
 ];
